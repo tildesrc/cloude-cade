@@ -1,0 +1,36 @@
+#+TITLE: <task title>
+#+TODO: PLANNING(p!) ITERATING(i!) REVIEW(r!) MERGING(m!) | COMPLETE(c!) DROPPED(x@)
+#+STARTUP: overview logdrawer
+
+# To start a task:
+#   cp TEMPLATE.org active/$(date +%F)-<slug>.org
+# Then fill in the title, properties, and goal. Initial state is
+# PLANNING with the :user: tag - the task is waiting for the user to
+# give the planning prompt. The agent flips to :agent: when actively
+# working and back to :user: when waiting on user feedback.
+
+* PLANNING <task title>                                               :user:
+  :PROPERTIES:
+  :ID:       <YYYY-MM-DD-slug>
+  :BRANCH:
+  :WORKTREE:
+  :PR:
+  :AGENT:
+  :END:
+
+** Goal
+   What "done" looks like, in one or two sentences.
+
+** Context
+   Why this task exists - background, motivating incident, or constraint
+   that wouldn't be obvious from the goal alone. Skip if the goal is
+   self-explanatory.
+
+** Acceptance criteria
+   - [ ]
+   - [ ]
+
+** Notes
+   Free-form scratch space. State transitions are logged automatically
+   in the LOGBOOK drawer below the heading - prose history doesn't need
+   to live here.
