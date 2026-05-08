@@ -20,7 +20,10 @@ part of the task, not a follow-up.
 
 The org files are the source of truth for in-flight work and its history:
 
-- `staging.org` — captures not yet started.
+- `staging.org` — captures not yet started, organized under top-level
+  *project* headings. Each project carries a `:REPO:` property
+  identifying its GitHub repo; that property travels with the task into
+  the active file when it's promoted.
 - `active/YYYY-MM-DD-<slug>.org` — one file per in-flight task.
 - `completed/YYYY-MM-DD-<slug>.org` — one file per merged task.
 - `dropped/YYYY-MM-DD-<slug>.org` — one file per abandoned task.
@@ -78,7 +81,8 @@ are waiting on something neither of you controls.
 ### Moving tasks between directories
 
 - `staging.org` entry → `active/YYYY-MM-DD-<slug>.org`: when the user
-  promotes a captured idea to active work.
+  promotes a captured idea to active work. Carry the project's `:REPO:`
+  property into the new file's properties drawer.
 - `active/<file>.org` → `completed/<file>.org`: when the task reaches
   `COMPLETE` (PR merged). This file move is part of the COMPLETE
   stage's responsibility — perform it as the agent finishes merging.

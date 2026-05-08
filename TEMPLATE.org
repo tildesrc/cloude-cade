@@ -16,6 +16,7 @@
 * PLANNING <task title>                                               :user:
   :PROPERTIES:
   :ID:       <YYYY-MM-DD-slug>
+  :REPO:     https://github.com/<org>/<repo>
   :BRANCH:
   :WORKTREE:
   :PR:

@@ -157,14 +157,51 @@ decide when to advance the state.
 **Definition of done**
 - The file is in `dropped/`.
 
+### staging.org structure
+
+Top-level headings in `staging.org` are **projects**. Each project
+carries a `:REPO:` property pointing to its GitHub repo, so when a
+task is promoted from staging to active the agent knows which repo to
+open a branch in. Ideas live as sub-headings under their project:
+
+```org
+* cloude
+  :PROPERTIES:
+  :REPO: https://github.com/<org>/cloude
+  :END:
+** Add a task-promotion script
+** Hook to auto-move COMPLETE files
+```
+
+### Active task properties
+
+Each active task file's top-level heading carries a properties drawer
+with the metadata needed to act on the task without hunting:
+
+| Property    | Meaning                                                        |
+| ----------- | -------------------------------------------------------------- |
+| `:ID:`      | Stable task identifier, matches the filename (`YYYY-MM-DD-<slug>`). |
+| `:REPO:`    | GitHub repo the task lives in. Carried from the staging project. |
+| `:BRANCH:`  | Feature branch name in the repo.                                |
+| `:WORKTREE:`| Local git worktree path where the agent works.                  |
+| `:PR:`      | Pull request URL once the draft PR exists.                      |
+| `:AGENT:`   | Link to the agent session driving the task.                     |
+
+`:ID:` and `:REPO:` are set when the task is promoted from staging.
+The rest are filled in as the task progresses (branch + worktree at
+the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
+whenever an agent is attached).
+
 ### Lifecycle
 
-1. Capture the idea in `staging.org` under `* Ideas`.
+1. Capture the idea in `staging.org` as a sub-heading under the right
+   project (create the project heading if it doesn't exist yet).
 2. When ready to start, copy the scaffold:
-   `cp TEMPLATE.org active/$(date +%F)-<slug>.org`. Move any notes from
-   staging into the new file and remove the staging entry. Initial state
-   is `PLANNING` with the `:user:` tag — the task is waiting for the
-   user to give the planning prompt.
+   `cp TEMPLATE.org active/$(date +%F)-<slug>.org`. Copy the project's
+   `:REPO:` into the new file's properties drawer, move any notes from
+   staging into the new file, and remove the staging entry. Initial
+   state is `PLANNING` with the `:user:` tag — the task is waiting for
+   the user to give the planning prompt.
 3. Update the TODO keyword as the task moves through stages, and flip
    the `:agent:`/`:user:` tag as the agent moves between working and
    waiting.
