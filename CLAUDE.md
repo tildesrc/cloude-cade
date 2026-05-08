@@ -55,18 +55,22 @@ user decision unless you have explicit authorization.
 work to land the PR — handling CI failures and trivial merge conflicts.
 Advance to `COMPLETE` yourself once the merge has actually landed.
 
-### Agent vs. user tag
+### Who-has-the-ball tag
 
-Within `PLANNING`, `ITERATING`, and `MERGING`, the heading carries a
-tag indicating who currently has the ball:
+Every in-flight task heading carries a tag indicating who currently
+has the ball:
 
 - `:agent:` — you are working autonomously.
 - `:user:` — the ball is in the user's court (you are waiting on user
   feedback, a decision, or a prompt to continue).
+- `:blocked:` — waiting on something external to this workflow (peer
+  reviewers, long-running external CI, an upstream dependency).
+  `REVIEW` is `:blocked:` by default.
 
-Flip this tag as you transition between working and waiting. This is
-*your* signal to the user — keep it accurate so the user can tell at a
-glance which tasks need their attention.
+Flip this tag as the situation changes. This is *your* signal to the
+user — keep it accurate so the user can tell at a glance which tasks
+need their attention vs. which are progressing on their own vs. which
+are waiting on something neither of you controls.
 
 ### Moving tasks between directories
 

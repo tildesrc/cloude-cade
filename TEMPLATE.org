@@ -6,8 +6,12 @@
 #   cp TEMPLATE.org active/$(date +%F)-<slug>.org
 # Then fill in the title, properties, and goal. Initial state is
 # PLANNING with the :user: tag - the task is waiting for the user to
-# give the planning prompt. The agent flips to :agent: when actively
-# working and back to :user: when waiting on user feedback.
+# give the planning prompt.
+#
+# Heading tags indicate who currently has the ball:
+#   :agent:    the agent is working autonomously
+#   :user:     the ball is in the user's court
+#   :blocked:  waiting on something external (peer review, external CI, etc.)
 
 * PLANNING <task title>                                               :user:
   :PROPERTIES:

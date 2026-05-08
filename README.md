@@ -63,26 +63,31 @@ Forward transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are
 own; it must wait for the user to make the call. Any state can transition
 to `DROPPED` at any time.
 
-### Agent vs. user (within PLANNING, ITERATING, and MERGING)
+### Who-has-the-ball tag
 
-Within `PLANNING`, `ITERATING`, and `MERGING`, an org tag on the
-heading captures who currently has the ball:
+Every in-flight task carries an org tag on its heading indicating who
+currently has the ball:
 
 - `:agent:` — the agent is working autonomously.
 - `:user:` — the ball is in the user's court (the agent is waiting on
   user feedback, a decision, or a prompt to continue).
+- `:blocked:` — waiting on something external to this workflow (peer
+  reviewers, long-running external CI, an upstream dependency, etc.).
 
-The agent flips its own tag between `:agent:` and `:user:` as it
-finishes a unit of work and needs input. It does **not** advance the
-TODO state itself — that's the user's call.
+The agent flips its own tag as it transitions between working, waiting
+on the user, and waiting on something external. It does **not** advance
+the TODO state itself (except `MERGING → COMPLETE`) — that's the user's
+call.
 
-`MERGING` is an agent-driven stage: the agent navigates CI failures and
-trivial merge conflicts to land the PR. It flips to `:user:` only when
-something needs human judgment (a substantive conflict, a CI failure
-that requires a design decision).
+Stage defaults:
 
-`REVIEW` (waiting on peer reviewers) carries no tag — the actor is
-external to this workflow.
+- `PLANNING`, `ITERATING` — `:agent:` while the agent is working,
+  `:user:` when waiting for feedback, `:blocked:` if waiting on
+  something external.
+- `REVIEW` — `:blocked:` by default (waiting on peer reviewers). Flip
+  to `:user:` if reviewers leave comments that need a triage decision.
+- `MERGING` — `:agent:` while the agent navigates CI and trivial
+  conflicts, `:user:` only when something needs human judgment.
 
 ### Lifecycle
 
