@@ -1,0 +1,10 @@
+# Emacs
+*~
+\#*\#
+.\#*
+auto-save-list/
+.org-id-locations
+
+# OS
+.DS_Store
+Thumbs.db
