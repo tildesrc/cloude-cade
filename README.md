@@ -196,15 +196,29 @@ whenever an agent is attached).
 
 1. Capture the idea in `staging.org` as a sub-heading under the right
    project (create the project heading if it doesn't exist yet).
-2. When ready to start, copy the scaffold:
-   `cp TEMPLATE.org active/$(date +%F)-<slug>.org`. Copy the project's
-   `:REPO:` into the new file's properties drawer, move any notes from
-   staging into the new file, and remove the staging entry. Initial
-   state is `PLANNING` with the `:user:` tag — the task is waiting for
-   the user to give the planning prompt.
+2. When ready to start, run `/promote` (see "Slash commands" below).
+   The skill walks through staging interactively, then sets up the
+   active task file, a feature branch, a worktree under `worktrees/`, a draft
+   PR, and a detached tmux session. Initial state is `PLANNING` with
+   the `:user:` tag — the task is waiting for the user's planning
+   prompt.
 3. Update the TODO keyword as the task moves through stages, and flip
    the `:agent:`/`:user:` tag as the agent moves between working and
    waiting.
 4. When the task reaches `COMPLETE`, move the file into `completed/`;
    when it reaches `DROPPED`, move the file into `dropped/`. Filename
    unchanged in either case.
+
+## Slash commands
+
+Project-scoped slash commands live in `.claude/commands/`. Available
+commands:
+
+- **`/promote`** — Promote an idea from `staging.org` into an active
+  task. Interactive: lists ideas grouped by project, asks which to
+  promote, auto-slugs the heading. Then creates the active task file,
+  a `cloude/<slug>` branch in the project's repo, a worktree under
+  `worktrees/<repo-name>/<slug>`, a draft PR, and a detached tmux session
+  named `cloude-<slug>`. Source clones are kept in `repos/<repo-name>`
+  (auto-cloned on first use); worktrees share that clone's git object
+  store. Both `repos/` and `worktrees/` are gitignored.
