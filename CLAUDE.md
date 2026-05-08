@@ -22,7 +22,8 @@ The org files are the source of truth for in-flight work and its history:
 
 - `staging.org` — captures not yet started.
 - `active/YYYY-MM-DD-<slug>.org` — one file per in-flight task.
-- `completed/YYYY-MM-DD-<slug>.org` — one file per finished/dropped task.
+- `completed/YYYY-MM-DD-<slug>.org` — one file per merged task.
+- `dropped/YYYY-MM-DD-<slug>.org` — one file per abandoned task.
 - `TEMPLATE.org` — starting scaffold for new active tasks; copy it,
   don't edit it in place.
 
@@ -41,8 +42,10 @@ Rules when working on a task:
 ### Workflow states
 
 The TODO keywords are: `PLANNING`, `ITERATING`, `REVIEW`, `MERGING`,
-`COMPLETE`, `DROPPED`. See `README.md` for the meaning of each and the
-allowed transitions.
+`COMPLETE`, `DROPPED`. **Read the "Stage details" section of
+`README.md` for the responsibilities and definition of done (DoD) of
+each state — that is the canonical spec of what you must accomplish in
+each stage.**
 
 **Forward transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are
 user-driven only.** Do not advance these states on your own — finish
@@ -77,6 +80,9 @@ are waiting on something neither of you controls.
 - `staging.org` entry → `active/YYYY-MM-DD-<slug>.org`: when the user
   promotes a captured idea to active work.
 - `active/<file>.org` → `completed/<file>.org`: when the task reaches
-  `COMPLETE` or `DROPPED`. Keep the filename; only the directory
-  changes. The file move is the signal that the task has left active
-  flight.
+  `COMPLETE` (PR merged). This file move is part of the COMPLETE
+  stage's responsibility — perform it as the agent finishes merging.
+- `active/<file>.org` → `dropped/<file>.org`: when the task reaches
+  `DROPPED` (abandoned).
+
+Keep the filename unchanged in both moves; only the directory changes.
