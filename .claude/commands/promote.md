@@ -99,13 +99,16 @@ Initial TODO state stays `PLANNING` and the heading tag stays `:user:`.
 
 Delete the chosen idea sub-heading and its body from `staging.org`. Leave the project heading in place even if no ideas remain under it.
 
-## 8. Create the tmux session
+## 8. Create the tmux session and launch the container
+
+Create a detached tmux session that runs `bin/cloude-run` in the worktree, so the dockerized Claude is up and waiting when the user attaches:
 
 ```
-tmux new-session -d -s cloude-<slug> -c <abs-worktree-path>
+tmux new-session -d -s cloude-<slug> -c <abs-worktree-path> \
+  "<cloude-root>/bin/cloude-run <abs-worktree-path> <abs-task-file-path>; exec bash"
 ```
 
-Do **not** launch `claude` or any other command in the session. The user will attach and drive it themselves.
+The trailing `exec bash` keeps the pane alive after the container exits, so the user can rerun `cloude-run` (e.g., to resume work) without recreating the session.
 
 If a session named `cloude-<slug>` already exists, stop and ask the user how to proceed (kill the existing one, rename, or abort).
 
@@ -118,7 +121,7 @@ Summarize what was done:
 - Branch: `cloude/<slug>` (based on `<default-branch>`)
 - Worktree: `<abs-worktree-path>`
 - Draft PR: `<pr-url>`
-- tmux session: `cloude-<slug>` (attach with `tmux attach -t cloude-<slug>`)
+- tmux session: `cloude-<slug>` running the dockerized Claude (attach with `tmux attach -t cloude-<slug>`)
 - Staging entry removed.
 
-The task is now in `PLANNING :user:` waiting for the user's planning prompt.
+The task is now in `PLANNING :user:` waiting for the user's planning prompt inside the container.

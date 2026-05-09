@@ -78,6 +78,24 @@ user — keep it accurate so the user can tell at a glance which tasks
 need their attention vs. which are progressing on their own vs. which
 are waiting on something neither of you controls.
 
+### Running inside the container
+
+When an agent is launched via `bin/cloude-run`, it runs inside a Docker
+container with `--dangerously-skip-permissions`. A few things to keep
+in mind:
+
+- The cloude repo, the task's worktree, and the task's active `.org`
+  file are all mounted at the **same absolute paths** they have on the
+  host. Cite paths verbatim — they're identical inside and out.
+- The container has Docker-in-Docker, so `docker compose` works for
+  spinning up the project's dev environment. The agent runs as an
+  unprivileged user; only `dockerd` is privileged.
+- The worktree is the cwd and writable. The task's `.org` file is
+  writable. The rest of the cloude repo (other tasks, README, etc.) is
+  read-only — treat the worktree as your sandbox.
+- git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
+  mounted read-only). Use them as you would on the host.
+
 ### Moving tasks between directories
 
 - `staging.org` entry → `active/YYYY-MM-DD-<slug>.org`: when the user

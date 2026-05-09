@@ -209,6 +209,60 @@ whenever an agent is attached).
    when it reaches `DROPPED`, move the file into `dropped/`. Filename
    unchanged in either case.
 
+## Running tasks in Docker
+
+Each active task can be run inside a sandboxed Docker container with
+`claude --dangerously-skip-permissions`, so the agent can act without
+per-tool permission prompts while staying isolated from the host.
+
+The container:
+
+- Runs Claude Code as an unprivileged `cloude` user whose UID/GID match
+  the invoking host user (so files written through bind mounts are
+  owned correctly on the host).
+- Has Docker-in-Docker (DinD), so `docker compose` works inside.
+- Persists Claude credentials/history in a named volume
+  (`cloude-claude-creds`), so login is required only once per
+  workstation.
+- Inherits git and gh auth read-only from the host's `~/.gitconfig` and
+  `~/.config/gh`.
+- Mounts the cloude repo at the same absolute path it has on the host
+  (read-only) plus rw overlays for the task's source clone, worktree,
+  and active `.org` file. Other tasks remain read-only.
+
+### One-time setup
+
+```sh
+make build       # build the image (takes a few minutes the first time)
+make login       # run claude interactively to perform the first-time login
+```
+
+After `make login` exits, credentials live in the `cloude-claude-creds`
+volume and persist across runs.
+
+### Launching a task
+
+`/promote` automatically starts the container in the task's tmux
+session. To launch (or relaunch) by hand:
+
+```sh
+bin/cloude-run <worktree-abs-path> <task-file-abs-path>
+```
+
+Both arguments are absolute paths the caller already has — `cloude-run`
+doesn't look up tasks by slug or parse org files.
+
+### Make targets
+
+- `make build` / `make rebuild` — build (cached) / rebuild (no cache).
+- `make shell` — bash shell in a transient container, for debugging the
+  image without a real task.
+- `make login` — interactive `claude` in a clean container; first-time
+  login flow.
+- `make info` — image and volume status.
+- `make clean-image` / `make clean-volume` / `make clean` — teardown.
+  Note that `clean-volume` erases saved credentials.
+
 ## Slash commands
 
 Project-scoped slash commands live in `.claude/commands/`. Available

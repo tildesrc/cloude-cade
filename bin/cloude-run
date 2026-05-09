@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Launch the cloude Docker container for a specific task.
+#
+# Designed to be called from /promote (which already has these paths in
+# hand) but also runnable by hand from any shell.
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <worktree-abs-path> <task-file-abs-path>
+
+Both arguments are absolute paths under the cloude repo root:
+  <worktree-abs-path>   Git worktree (cwd inside the container).
+                        Must live under <cloude-root>/worktrees/<repo>/<slug>.
+  <task-file-abs-path>  Active task .org file.
+                        Must live under <cloude-root>/active/.
+EOF
+}
+
+if [[ $# -lt 2 ]]; then
+    usage >&2
+    exit 1
+fi
+
+WORKTREE="$1"
+TASK_FILE="$2"
+
+# Resolve cloude root from script location: bin/cloude-run -> cloude/.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLOUDE="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ ! -d "$WORKTREE" ]]; then
+    echo "ERROR: worktree does not exist: $WORKTREE" >&2
+    exit 1
+fi
+if [[ ! -f "$TASK_FILE" ]]; then
+    echo "ERROR: task file does not exist: $TASK_FILE" >&2
+    exit 1
+fi
+
+# Canonicalize so the container path matches.
+WORKTREE="$(cd "$WORKTREE" && pwd)"
+TASK_FILE="$(cd "$(dirname "$TASK_FILE")" && pwd)/$(basename "$TASK_FILE")"
+
+case "$WORKTREE" in
+    "$CLOUDE/worktrees/"*) ;;
+    *)
+        echo "ERROR: worktree must live under $CLOUDE/worktrees/: $WORKTREE" >&2
+        exit 1
+        ;;
+esac
+
+case "$TASK_FILE" in
+    "$CLOUDE/active/"*) ;;
+    *)
+        echo "ERROR: task file must live under $CLOUDE/active/: $TASK_FILE" >&2
+        exit 1
+        ;;
+esac
+
+# Derive repo info: WORKTREE = $CLOUDE/worktrees/<repo>/<slug>
+REPO_NAME="$(basename "$(dirname "$WORKTREE")")"
+SOURCE_CLONE="$CLOUDE/repos/$REPO_NAME"
+
+if [[ ! -d "$SOURCE_CLONE" ]]; then
+    echo "ERROR: source clone not found at $SOURCE_CLONE" >&2
+    echo "       (run /promote to create it, or git clone manually)" >&2
+    exit 1
+fi
+
+# Ensure the image exists / is up to date. Cached when nothing changed.
+make -C "$CLOUDE" --no-print-directory build
+
+exec docker run --rm -it --privileged \
+    -v cloude-claude-creds:/home/cloude/.claude \
+    -v "$CLOUDE":"$CLOUDE":ro \
+    -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
+    -v "$WORKTREE":"$WORKTREE":rw \
+    -v "$TASK_FILE":"$TASK_FILE":rw \
+    -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
+    -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
+    -w "$WORKTREE" \
+    cloude \
+    claude --dangerously-skip-permissions
