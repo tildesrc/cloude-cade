@@ -3,7 +3,7 @@ FROM node:20-bookworm
 # Base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg lsb-release \
-        git tmux less jq gosu sudo \
+        git tmux less jq gosu sudo vim \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CE (engine + CLI + compose plugin) for DinD
