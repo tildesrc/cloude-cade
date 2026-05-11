@@ -14,7 +14,7 @@ Both arguments are absolute paths under the cloude repo root:
   <worktree-abs-path>   Git worktree (cwd inside the container).
                         Must live under <cloude-root>/worktrees/<repo>/<slug>.
   <task-file-abs-path>  Active task .org file.
-                        Must live under <cloude-root>/active/.
+                        Must live under <cloude-root>/tasks/active/.
 EOF
 }
 
@@ -52,9 +52,9 @@ case "$WORKTREE" in
 esac
 
 case "$TASK_FILE" in
-    "$CLOUDE/active/"*) ;;
+    "$CLOUDE/tasks/active/"*) ;;
     *)
-        echo "ERROR: task file must live under $CLOUDE/active/: $TASK_FILE" >&2
+        echo "ERROR: task file must live under $CLOUDE/tasks/active/: $TASK_FILE" >&2
         exit 1
         ;;
 esac

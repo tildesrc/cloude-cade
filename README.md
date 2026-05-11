@@ -31,19 +31,21 @@ Emacs `org-mode` file. The layout is designed so that multiple agents can
 update task state concurrently without conflicting:
 
 ```
-staging.org              ;; lightweight captures, not yet started
-active/                  ;; one file per in-flight task
-  YYYY-MM-DD-<slug>.org
-completed/               ;; one file per merged task (COMPLETE)
-  YYYY-MM-DD-<slug>.org
-dropped/                 ;; one file per abandoned task (DROPPED)
-  YYYY-MM-DD-<slug>.org
-TEMPLATE.org             ;; scaffold for new active tasks (copy, don't edit)
+tasks/
+  staging.org            ;; lightweight captures, not yet started
+  active/                ;; one file per in-flight task
+    YYYY-MM-DD-<slug>.org
+  completed/             ;; one file per merged task (COMPLETE)
+    YYYY-MM-DD-<slug>.org
+  dropped/               ;; one file per abandoned task (DROPPED)
+    YYYY-MM-DD-<slug>.org
+  TEMPLATE.org           ;; scaffold for new active tasks (copy, don't edit)
 ```
 
 - **Top-level state** is encoded by which directory a task lives in
-  (`staging` → `active/` → `completed/` or `dropped/`). The high-level
-  overview comes from directory listings, not a global index file.
+  (`tasks/staging.org` → `tasks/active/` → `tasks/completed/` or
+  `tasks/dropped/`). The high-level overview comes from directory
+  listings, not a global index file.
 - **Workflow stage** is encoded by the TODO keyword inside each active
   file (see below), so org-mode's logbook captures every state transition.
 - **One file per task** means each agent edits its own file. Concurrent
@@ -144,22 +146,22 @@ decide when to advance the state.
 #### COMPLETE (terminal)
 
 **Responsibilities**
-- Move the task's org file from `active/` to `completed/`.
+- Move the task's org file from `tasks/active/` to `tasks/completed/`.
 
 **Definition of done**
-- The file is in `completed/`.
+- The file is in `tasks/completed/`.
 
 #### DROPPED (terminal)
 
 **Responsibilities**
-- Move the task's org file from `active/` to `dropped/`.
+- Move the task's org file from `tasks/active/` to `tasks/dropped/`.
 
 **Definition of done**
-- The file is in `dropped/`.
+- The file is in `tasks/dropped/`.
 
 ### staging.org structure
 
-Top-level headings in `staging.org` are **projects**. Each project
+Top-level headings in `tasks/staging.org` are **projects**. Each project
 carries a `:REPO:` property pointing to its GitHub repo, so when a
 task is promoted from staging to active the agent knows which repo to
 open a branch in. Ideas live as sub-headings under their project:
@@ -194,7 +196,7 @@ whenever an agent is attached).
 
 ### Lifecycle
 
-1. Capture the idea in `staging.org` as a sub-heading under the right
+1. Capture the idea in `tasks/staging.org` as a sub-heading under the right
    project (create the project heading if it doesn't exist yet).
 2. When ready to start, run `/promote` (see "Slash commands" below).
    The skill walks through staging interactively, then sets up the
@@ -205,9 +207,9 @@ whenever an agent is attached).
 3. Update the TODO keyword as the task moves through stages, and flip
    the `:agent:`/`:user:` tag as the agent moves between working and
    waiting.
-4. When the task reaches `COMPLETE`, move the file into `completed/`;
-   when it reaches `DROPPED`, move the file into `dropped/`. Filename
-   unchanged in either case.
+4. When the task reaches `COMPLETE`, move the file into
+   `tasks/completed/`; when it reaches `DROPPED`, move the file into
+   `tasks/dropped/`. Filename unchanged in either case.
 
 ## Running tasks in Docker
 
@@ -268,11 +270,12 @@ doesn't look up tasks by slug or parse org files.
 Project-scoped slash commands live in `.claude/commands/`. Available
 commands:
 
-- **`/promote`** — Promote an idea from `staging.org` into an active
-  task. Interactive: lists ideas grouped by project, asks which to
-  promote, auto-slugs the heading. Then creates the active task file,
-  a `cloude/<slug>` branch in the project's repo, a worktree under
-  `worktrees/<repo-name>/<slug>`, a draft PR, and a detached tmux session
-  named `cloude-<slug>`. Source clones are kept in `repos/<repo-name>`
-  (auto-cloned on first use); worktrees share that clone's git object
-  store. Both `repos/` and `worktrees/` are gitignored.
+- **`/promote`** — Promote an idea from `tasks/staging.org` into an
+  active task. Interactive: lists ideas grouped by project, asks which
+  to promote, auto-slugs the heading. Then creates the active task
+  file under `tasks/active/`, a `cloude/<slug>` branch in the
+  project's repo, a worktree under `worktrees/<repo-name>/<slug>`, a
+  draft PR, and a detached tmux session named `cloude-<slug>`. Source
+  clones are kept in `repos/<repo-name>` (auto-cloned on first use);
+  worktrees share that clone's git object store. Both `repos/` and
+  `worktrees/` are gitignored.

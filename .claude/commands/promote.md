@@ -1,14 +1,14 @@
 ---
-description: Promote an idea from staging.org into an active task (file, branch, worktree, draft PR, tmux session)
+description: Promote an idea from tasks/staging.org into an active task (file, branch, worktree, draft PR, tmux session)
 ---
 
-You are promoting an idea from `staging.org` into an active task. Walk through these steps interactively with the user. Do not skip steps; do not advance past a step until it has succeeded. If any step fails, stop and tell the user exactly what succeeded and what did not so they can clean up.
+You are promoting an idea from `tasks/staging.org` into an active task. Walk through these steps interactively with the user. Do not skip steps; do not advance past a step until it has succeeded. If any step fails, stop and tell the user exactly what succeeded and what did not so they can clean up.
 
 The cloude repo root (current working directory when this command was invoked) is the anchor for relative paths below.
 
 ## 1. Show staging contents and pick an idea
 
-Read `staging.org`. Parse it:
+Read `tasks/staging.org`. Parse it:
 
 - Top-level headings (`*`) are projects. Each carries a `:REPO:` property pointing to a GitHub repo.
 - Sub-headings (`**`) under a project are ideas.
@@ -76,7 +76,7 @@ Capture the returned PR URL as `<pr-url>`.
 ## 6. Create the active task file
 
 ```
-cp <cloude-root>/TEMPLATE.org <cloude-root>/active/<YYYY-MM-DD>-<slug>.org
+cp <cloude-root>/tasks/TEMPLATE.org <cloude-root>/tasks/active/<YYYY-MM-DD>-<slug>.org
 ```
 
 (Use today's date in `YYYY-MM-DD` format.)
@@ -95,9 +95,9 @@ Edit the new file:
 
 Initial TODO state stays `PLANNING` and the heading tag stays `:user:`.
 
-## 7. Remove the entry from staging.org
+## 7. Remove the entry from tasks/staging.org
 
-Delete the chosen idea sub-heading and its body from `staging.org`. Leave the project heading in place even if no ideas remain under it.
+Delete the chosen idea sub-heading and its body from `tasks/staging.org`. Leave the project heading in place even if no ideas remain under it.
 
 ## 8. Create the tmux session and launch the container
 
@@ -116,7 +116,7 @@ If a session named `cloude-<slug>` already exists, stop and ask the user how to 
 
 Summarize what was done:
 
-- Active task file: `active/<YYYY-MM-DD>-<slug>.org`
+- Active task file: `tasks/active/<YYYY-MM-DD>-<slug>.org`
 - Source clone: `<source-clone>`
 - Branch: `cloude/<slug>` (based on `<default-branch>`)
 - Worktree: `<abs-worktree-path>`
