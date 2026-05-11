@@ -226,8 +226,11 @@ The container:
 - Persists Claude credentials/history in a named volume
   (`cloude-claude-creds`), so login is required only once per
   workstation.
-- Inherits git and gh auth read-only from the host's `~/.gitconfig` and
-  `~/.config/gh`.
+- Inherits git, gh, and docker-registry auth read-only from the host's
+  `~/.gitconfig`, `~/.config/gh`, and `~/.docker/config.json` (the
+  docker config mount is optional — skipped if absent). Mounting
+  `~/.docker/config.json` lets the in-container `docker pull` reach
+  private registries the host is logged into (e.g. ghcr.io).
 - Mounts the cloude repo at the same absolute path it has on the host
   (read-only) plus rw overlays for the task's source clone, worktree,
   and active `.org` file. Other tasks remain read-only.

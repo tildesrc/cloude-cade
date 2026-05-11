@@ -72,6 +72,14 @@ fi
 # Ensure the image exists / is up to date. Cached when nothing changed.
 make -C "$CLOUDE" --no-print-directory build
 
+# Optional: mount the host's docker config so the in-container docker
+# CLI can pull from private registries (e.g. ghcr.io). Skipped silently
+# if the host has no docker config yet.
+DOCKER_CFG_MOUNT=()
+if [[ -f "$HOME/.docker/config.json" ]]; then
+    DOCKER_CFG_MOUNT=(-v "$HOME/.docker/config.json":/home/cloude/.docker/config.json:ro)
+fi
+
 exec docker run --rm -it --privileged \
     -v cloude-claude-creds:/persist \
     -v "$CLOUDE":"$CLOUDE":ro \
@@ -80,6 +88,7 @@ exec docker run --rm -it --privileged \
     -v "$TASK_FILE":"$TASK_FILE":rw \
     -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
+    "${DOCKER_CFG_MOUNT[@]}" \
     -w "$WORKTREE" \
     cloude \
     claude --dangerously-skip-permissions

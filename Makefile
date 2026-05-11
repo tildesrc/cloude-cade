@@ -36,6 +36,7 @@ login: build
 		-v $(VOLUME):/persist \
 		-v $$HOME/.gitconfig:/home/cloude/.gitconfig:ro \
 		-v $$HOME/.config/gh:/home/cloude/.config/gh:ro \
+		$$([ -f $$HOME/.docker/config.json ] && echo "-v $$HOME/.docker/config.json:/home/cloude/.docker/config.json:ro") \
 		$(IMAGE) claude
 
 info:
