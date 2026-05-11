@@ -15,7 +15,8 @@ RUN install -m 0755 -d /etc/apt/keyrings \
        > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-compose-plugin \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (Debian's gh is older than upstream)
@@ -51,7 +52,9 @@ RUN set -eux; \
     groupadd --gid "${HOST_GID}" cloude; \
     useradd --uid "${HOST_UID}" --gid "${HOST_GID}" \
         --create-home --shell /bin/bash cloude; \
-    usermod -aG docker cloude
+    usermod -aG docker cloude; \
+    echo "cloude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/cloude; \
+    chmod 0440 /etc/sudoers.d/cloude
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
