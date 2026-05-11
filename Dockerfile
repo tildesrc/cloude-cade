@@ -56,6 +56,15 @@ RUN set -eux; \
     echo "cloude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/cloude; \
     chmod 0440 /etc/sudoers.d/cloude
 
+# System-level git config: route HTTPS GitHub auth through the gh CLI,
+# which gets its PAT from the host's mounted ~/.config/gh. The user's
+# ~/.gitconfig (mounted read-only) takes precedence for everything
+# else.
+RUN { \
+        echo '[credential "https://github.com"]'; \
+        echo '    helper = !gh auth git-credential'; \
+    } >> /etc/gitconfig
+
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
