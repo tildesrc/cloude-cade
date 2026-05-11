@@ -73,7 +73,7 @@ fi
 make -C "$CLOUDE" --no-print-directory build
 
 exec docker run --rm -it --privileged \
-    -v cloude-claude-creds:/home/cloude/.claude \
+    -v cloude-claude-creds:/persist \
     -v "$CLOUDE":"$CLOUDE":ro \
     -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
     -v "$WORKTREE":"$WORKTREE":rw \

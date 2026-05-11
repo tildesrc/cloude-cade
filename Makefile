@@ -33,7 +33,7 @@ shell: build
 
 login: build
 	docker run --rm -it --privileged \
-		-v $(VOLUME):/home/cloude/.claude \
+		-v $(VOLUME):/persist \
 		-v $$HOME/.gitconfig:/home/cloude/.gitconfig:ro \
 		-v $$HOME/.config/gh:/home/cloude/.config/gh:ro \
 		$(IMAGE) claude
