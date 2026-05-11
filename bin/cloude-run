@@ -69,6 +69,27 @@ if [[ ! -d "$SOURCE_CLONE" ]]; then
     exit 1
 fi
 
+# Per-repo pre-launch hook. If $CLOUDE/repo-hooks/<repo-name> exists and
+# is executable, run it with cwd = worktree before the container starts.
+# Use it to delete/edit files the in-container Claude shouldn't see, mark
+# them with `git update-index --skip-worktree`, or add lines to
+# .git/info/exclude so the changes don't show up in `git status`. Hook
+# failures abort the launch.
+HOOK="$CLOUDE/repo-hooks/$REPO_NAME"
+if [[ -x "$HOOK" ]]; then
+    echo "Running pre-launch hook: $HOOK"
+    (
+        cd "$WORKTREE"
+        CLOUDE_WORKTREE="$WORKTREE" \
+        CLOUDE_TASK_FILE="$TASK_FILE" \
+        CLOUDE_REPO_NAME="$REPO_NAME" \
+            "$HOOK"
+    ) || {
+        echo "ERROR: pre-launch hook failed; not starting container." >&2
+        exit 1
+    }
+fi
+
 # Ensure the image exists / is up to date. Cached when nothing changed.
 make -C "$CLOUDE" --no-print-directory build
 

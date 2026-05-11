@@ -257,6 +257,34 @@ bin/cloude-run <worktree-abs-path> <task-file-abs-path>
 Both arguments are absolute paths the caller already has — `cloude-run`
 doesn't look up tasks by slug or parse org files.
 
+### Per-repo pre-launch hooks
+
+Some projects ship config that doesn't behave inside the container —
+plugin entries pointing at host binaries, project skills that depend
+on external services, etc. To shape the worktree before the container
+starts, drop an executable script at:
+
+```
+repo-hooks/<repo-name>          (e.g. repo-hooks/acme-webapp)
+```
+
+`cloude-run` invokes the hook (if present and executable) with cwd =
+the worktree, just before launching the container. The hook gets these
+env vars:
+
+- `CLOUDE_WORKTREE` — absolute path of the task worktree.
+- `CLOUDE_TASK_FILE` — absolute path of the active task `.org` file.
+- `CLOUDE_REPO_NAME` — the repo name (matches the hook filename).
+
+A failed hook (nonzero exit) aborts the launch.
+
+Typical use: delete or edit a file the container shouldn't see, then
+hide the change from `git status` via `git update-index
+--skip-worktree <file>` (for tracked files) or by appending to
+`.git/info/exclude` (for untracked files). Worktrees have their own
+`index` and `info/exclude`, so these changes are isolated to the one
+worktree.
+
 ### Make targets
 
 - `make build` / `make rebuild` — build (cached) / rebuild (no cache).
