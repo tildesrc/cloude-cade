@@ -30,15 +30,19 @@ Show the proposed slug to the user and ask them to confirm or override.
 
 From the project's `:REPO:` URL:
 
-- Extract the repo name (last path segment, strip any trailing `.git`).
-- The source clone lives at `<cloude-root>/repos/<repo-name>`. If it doesn't exist yet, clone it:
+- Extract the **owner** and **repo name** (handle both forms — `git@github.com:OWNER/REPO[.git]` and `https://github.com/OWNER/REPO[.git]`).
+- Compute the **HTTPS clone URL**: `https://github.com/<owner>/<repo>.git`. We always clone via HTTPS so the in-container `git push` (which has no SSH keys, only a forwarded `GH_TOKEN`) works.
+- The source clone lives at `<cloude-root>/repos/<repo-name>`. If it doesn't exist yet, clone it and configure the gh credential helper for this repo:
   ```
   mkdir -p <cloude-root>/repos
-  git clone <repo-url> <cloude-root>/repos/<repo-name>
+  git clone <https-clone-url> <cloude-root>/repos/<repo-name>
+  git -C <cloude-root>/repos/<repo-name> \
+      config credential."https://github.com".helper '!gh auth git-credential'
   ```
+  The per-repo credential helper makes all subsequent `git fetch`/`push` against this clone auth through `gh` on the host (and the container's `/etc/gitconfig` configures the same helper for inside the container).
 - Detect the default branch:
   ```
-  gh repo view <repo-url> --json defaultBranchRef -q .defaultBranchRef.name
+  gh repo view <owner>/<repo> --json defaultBranchRef -q .defaultBranchRef.name
   ```
 
 Store as `<repo-name>`, `<source-clone>`, `<default-branch>`.

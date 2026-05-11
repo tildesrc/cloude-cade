@@ -101,6 +101,14 @@ if [[ -f "$HOME/.docker/config.json" ]]; then
     DOCKER_CFG_MOUNT=(-v "$HOME/.docker/config.json":/home/cloude/.docker/config.json:ro)
 fi
 
+# Forward GH_TOKEN so the in-container 'gh' (and the gh credential
+# helper baked into /etc/gitconfig) can authenticate against GitHub.
+# Skipped silently if the host doesn't have it set.
+GH_TOKEN_ENV=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+    GH_TOKEN_ENV=(-e "GH_TOKEN=$GH_TOKEN")
+fi
+
 exec docker run --rm -it --privileged \
     -v cloude-claude-creds:/persist \
     -v "$CLOUDE":"$CLOUDE":ro \
@@ -110,6 +118,7 @@ exec docker run --rm -it --privileged \
     -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
     "${DOCKER_CFG_MOUNT[@]}" \
+    "${GH_TOKEN_ENV[@]}" \
     -w "$WORKTREE" \
     cloude \
     claude --dangerously-skip-permissions

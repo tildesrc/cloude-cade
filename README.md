@@ -231,6 +231,12 @@ The container:
   docker config mount is optional — skipped if absent). Mounting
   `~/.docker/config.json` lets the in-container `docker pull` reach
   private registries the host is logged into (e.g. ghcr.io).
+- The host's `GH_TOKEN` env var is forwarded into the container (when
+  set) so `gh` and the git credential helper baked into
+  `/etc/gitconfig` can authenticate against GitHub for HTTPS `git
+  fetch`/`push`. SSH-form remotes are not supported inside the
+  container (no SSH keys mounted); `/promote` clones via HTTPS to
+  avoid this.
 - Mounts the cloude repo at the same absolute path it has on the host
   (read-only) plus rw overlays for the task's source clone, worktree,
   and active `.org` file. Other tasks remain read-only.
