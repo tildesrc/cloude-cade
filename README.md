@@ -153,7 +153,13 @@ The container:
 - Runs Claude Code as an unprivileged `cloude` user whose UID/GID match
   the invoking host user (so files written through bind mounts are
   owned correctly on the host).
-- Has Docker-in-Docker (DinD), so `docker compose` works inside.
+- Has Docker-in-Docker (DinD), so `docker compose` works inside. Each
+  task gets its own `cloude-dind-<slug>` volume backing
+  `/var/lib/docker` — necessary because nested `overlay2` on the
+  container's own overlay layer hits whiteout permission errors, and
+  because multiple in-flight tasks can't share one docker data dir
+  (dockerd holds an exclusive lock). The volume persists across
+  restarts of the same task to cache pulled images.
 - Persists Claude credentials/history in a named volume
   (`cloude-claude-creds`), so login is required only once per
   workstation.
@@ -230,8 +236,10 @@ worktree.
 - `make login` — interactive `claude` in a clean container; first-time
   login flow.
 - `make info` — image and volume status.
-- `make clean-image` / `make clean-volume` / `make clean` — teardown.
-  Note that `clean-volume` erases saved credentials.
+- `make clean-image` / `make clean-volume` / `make clean-dind-data` /
+  `make clean` — teardown. `clean-volume` erases saved credentials;
+  `clean-dind-data` removes every per-task `cloude-dind-*` volume
+  (image caches inside containers).
 
 ## Slash commands
 
