@@ -89,7 +89,20 @@ If it fails — the worktree has uncommitted changes, untracked files, or is loc
 
 If the user picks force, run `git -C <source-clone> worktree remove --force <WORKTREE>` and continue.
 
-## 8. Delete the local branch (COMPLETE only)
+## 8. Remove the per-task DinD volume
+
+The task's in-container dockerd had a dedicated `cloude-dind-<slug>` volume backing `/var/lib/docker` (see `bin/cloude-run`). The cloude container is gone by this point (tmux session was killed in step 6, which exits the `--rm` container), so the volume isn't in use.
+
+```
+docker volume rm cloude-dind-<slug>
+```
+
+Tolerate two non-failure cases:
+
+- The volume doesn't exist (e.g., the task never actually ran a container, or someone already cleaned it manually). Continue silently.
+- The volume rm fails because something else is holding it. Surface the error, list `docker ps -a --filter "volume=cloude-dind-<slug>"`, and ask the user whether to abort or skip the volume removal and continue with the rest of finalize.
+
+## 9. Delete the local branch (COMPLETE only)
 
 ```
 git -C <source-clone> branch -D <BRANCH>
@@ -97,7 +110,7 @@ git -C <source-clone> branch -D <BRANCH>
 
 `-D` (capital) because the branch may not show as merged into the *local* checkout's HEAD even though it merged upstream. For DROPPED, **skip this step** — leave the local branch in place in case the user wants to revisit the work.
 
-## 9. Move the file in the cloude repo
+## 10. Move the file in the cloude repo
 
 For COMPLETE:
 
@@ -113,7 +126,7 @@ git -C <cloude-root> mv tasks/active/<filename>.org tasks/dropped/<filename>.org
 
 `git mv` stages the rename automatically.
 
-## 10. Commit the finalize in the cloude repo
+## 11. Commit the finalize in the cloude repo
 
 For COMPLETE:
 
@@ -131,7 +144,7 @@ git -C <cloude-root> commit -m "Drop: <heading text>" \
 
 Pass the two paths as explicit arguments after `--` so the commit only includes the rename, not any other staged work.
 
-## 11. Report
+## 12. Report
 
 Summarize what was done:
 
@@ -139,6 +152,7 @@ Summarize what was done:
 - Task file: moved from `tasks/active/<filename>.org` to `tasks/<completed|dropped>/<filename>.org`
 - tmux session `<tmux-session>`: killed (or "was not running")
 - Worktree `<WORKTREE>`: removed
+- DinD volume `cloude-dind-<slug>`: removed (or "did not exist")
 - Local branch `<BRANCH>`: deleted (COMPLETE) or preserved (DROPPED)
 - PR `<pr-url>`: confirmed MERGED (COMPLETE) or closed (DROPPED)
 - Cloude commit: `<short-sha> <commit-message>`
