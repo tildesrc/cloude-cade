@@ -80,7 +80,14 @@ Silent if the session doesn't exist. Capture whether it was actually killed (the
 git -C <source-clone> worktree remove <WORKTREE>
 ```
 
-This refuses with a clear error if the worktree has uncommitted changes or is locked. **Don't pass `--force`** — surface the error to the user, tell them which path needs cleanup, and stop. They can `git -C <source-clone> worktree remove --force <WORKTREE>` themselves and re-run.
+If this succeeds, proceed.
+
+If it fails — the worktree has uncommitted changes, untracked files, or is locked — **don't silently retry with `--force`**. Surface git's error to the user, list the offending paths (`git -C <WORKTREE> status --short`), and ask whether to:
+
+- **Force-remove** (discards the uncommitted/untracked files inside the worktree, then proceeds), or
+- **Abort** so the user can move/save the files themselves and re-run `/finalize`.
+
+If the user picks force, run `git -C <source-clone> worktree remove --force <WORKTREE>` and continue.
 
 ## 8. Delete the local branch (COMPLETE only)
 
