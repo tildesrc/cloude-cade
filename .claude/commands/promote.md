@@ -103,7 +103,18 @@ Initial TODO state stays `PLANNING` and the heading tag stays `:user:`.
 
 Delete the chosen idea sub-heading and its body from `tasks/staging.org`. Leave the project heading in place even if no ideas remain under it.
 
-## 8. Create the tmux session and launch the container
+## 8. Commit the promotion in the cloude repo
+
+Stage the new active task file and the staging.org edit, then commit. Don't use `git add -A` — stage these two paths by name to avoid sweeping in any unrelated work:
+
+```
+git -C <cloude-root> add tasks/staging.org tasks/active/<YYYY-MM-DD>-<slug>.org
+git -C <cloude-root> commit -m "Promote: <idea heading text>"
+```
+
+If `git status` shows nothing to commit (e.g., re-running a partially-completed promote), skip this step.
+
+## 9. Create the tmux session and launch the container
 
 Create a detached tmux session that runs `bin/cloude-run` in the worktree, so the dockerized Claude is up and waiting when the user attaches:
 
@@ -116,7 +127,7 @@ The trailing `exec bash` keeps the pane alive after the container exits, so the 
 
 If a session named `cloude-<slug>` already exists, stop and ask the user how to proceed (kill the existing one, rename, or abort).
 
-## 9. Report
+## 10. Report
 
 Summarize what was done:
 
