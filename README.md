@@ -247,3 +247,14 @@ commands:
   clones are kept in `repos/<repo-name>` (auto-cloned on first use);
   worktrees share that clone's git object store. Both `repos/` and
   `worktrees/` are gitignored.
+- **`/finalize`** — Finalize an active task and perform the cleanup
+  the in-container agent can't do (the cloude repo is mounted ro from
+  inside the container). Interactive: lists active tasks with their
+  current TODO state, asks which to finalize. For `COMPLETE`,
+  verifies the PR is merged, kills the tmux session, removes the
+  worktree, deletes the local branch, and `git mv`s the task file to
+  `tasks/completed/`. For `DROPPED`, closes the PR, kills the tmux
+  session, removes the worktree (but preserves the local branch), and
+  `git mv`s the file to `tasks/dropped/`. Force-drop is allowed from
+  any non-terminal state; force-complete is not (COMPLETE requires
+  the agent to have verified the merge).

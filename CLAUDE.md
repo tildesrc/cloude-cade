@@ -63,11 +63,14 @@ feedback). Transitioning to `DROPPED` is allowed from any state but
 should also generally be a user decision unless you have explicit
 authorization.
 
-`MERGING`, `COMPLETE`, and `DROPPED` are agent-advanceable: do the
-work to meet the DoD, then update the TODO state yourself. For
-`MERGING` that means actively managing the merge — re-adding to the
-queue on flaky failures, resolving trivial conflicts — and flipping
-to `COMPLETE` once the merge has landed.
+`MERGING` is agent-driven: actively manage the merge — re-add to the
+queue on flaky failures, resolve trivial conflicts — and flip the
+TODO keyword to `COMPLETE` once the merge has landed. For `COMPLETE`
+and `DROPPED`, the in-container agent sets the TODO keyword and tag,
+then stops; the file move and worktree/tmux/branch cleanup happen
+from the host via the `/finalize` slash command (the cloude repo is
+mounted read-only inside the container, so the agent can't perform
+the move itself).
 
 ### Stage details
 
@@ -117,19 +120,36 @@ to `COMPLETE` once the merge has landed.
 
 #### COMPLETE (terminal)
 
-**Responsibilities**
-- Move the task's org file from `tasks/active/` to `tasks/completed/`.
+The container mounts the cloude repo read-only, so the file move
+itself is done from the host via `/finalize` — not by the
+in-container agent.
+
+**Responsibilities (in-container agent)**
+- Once the PR is merged, set the TODO keyword to `COMPLETE` and flip
+  the tag to `:user:`. Then stop — `/finalize` on the host will move
+  the file and clean up.
 
 **Definition of done**
-- The file is in `tasks/completed/`.
+- The task file has TODO state `COMPLETE` and tag `:user:`.
+- (The host-side `/finalize` then moves the file to
+  `tasks/completed/`, kills the tmux session, removes the worktree,
+  and deletes the local branch.)
 
 #### DROPPED (terminal)
 
-**Responsibilities**
-- Move the task's org file from `tasks/active/` to `tasks/dropped/`.
+Same read-only-mount caveat as COMPLETE: the file move and cleanup
+happen from the host via `/finalize`.
+
+**Responsibilities (in-container agent)**
+- Set the TODO keyword to `DROPPED` and flip the tag to `:user:`.
+  Then stop.
 
 **Definition of done**
-- The file is in `tasks/dropped/`.
+- The task file has TODO state `DROPPED` and tag `:user:`.
+- (The host-side `/finalize` then closes the PR, moves the file to
+  `tasks/dropped/`, kills the tmux session, and removes the worktree.
+  The local branch is preserved on DROPPED in case you want to
+  revisit.)
 
 #### Per-stage tag defaults
 
