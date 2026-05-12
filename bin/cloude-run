@@ -61,13 +61,7 @@ esac
 
 # Derive repo info: WORKTREE = $CLOUDE/worktrees/<repo>/<slug>
 REPO_NAME="$(basename "$(dirname "$WORKTREE")")"
-SLUG="$(basename "$WORKTREE")"
 SOURCE_CLONE="$CLOUDE/repos/$REPO_NAME"
-# Per-task volume for the in-container dockerd's /var/lib/docker.
-# Must be its own volume (one dockerd per data dir); sharing across
-# running cloude containers would corrupt the data dir. Persists
-# across restarts of the same task to cache pulled images.
-DIND_VOLUME="cloude-dind-$SLUG"
 
 if [[ ! -d "$SOURCE_CLONE" ]]; then
     echo "ERROR: source clone not found at $SOURCE_CLONE" >&2
@@ -117,7 +111,6 @@ fi
 
 exec docker run --rm -it --privileged \
     -v cloude-claude-creds:/persist \
-    -v "$DIND_VOLUME":/var/lib/docker \
     -v "$CLOUDE":"$CLOUDE":ro \
     -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
     -v "$WORKTREE":"$WORKTREE":rw \

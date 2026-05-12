@@ -3,7 +3,7 @@ VOLUME := cloude-claude-creds
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 
-.PHONY: help build rebuild shell login info clean-image clean-volume clean-dind-data clean
+.PHONY: help build rebuild shell login info clean-image clean-volume clean
 
 help:
 	@echo "Targets:"
@@ -14,8 +14,7 @@ help:
 	@echo "  info          Show image and volume status"
 	@echo "  clean-image   Remove the image"
 	@echo "  clean-volume  Remove the credentials volume (forces re-login)"
-	@echo "  clean-dind-data  Remove per-task DinD data volumes (cloude-dind-*)"
-	@echo "  clean         clean-image + clean-volume + clean-dind-data"
+	@echo "  clean         clean-image + clean-volume"
 
 build:
 	docker build \
@@ -30,14 +29,11 @@ rebuild:
 		-t $(IMAGE) .
 
 shell: build
-	docker run --rm -it --privileged \
-		-v /var/lib/docker \
-		--entrypoint bash $(IMAGE)
+	docker run --rm -it --privileged --entrypoint bash $(IMAGE)
 
 login: build
 	docker run --rm -it --privileged \
 		-v $(VOLUME):/persist \
-		-v /var/lib/docker \
 		-v $$HOME/.gitconfig:/home/cloude/.gitconfig:ro \
 		-v $$HOME/.config/gh:/home/cloude/.config/gh:ro \
 		$$([ -f $$HOME/.docker/config.json ] && echo "-v $$HOME/.docker/config.json:/home/cloude/.docker/config.json:ro") \
@@ -57,13 +53,4 @@ clean-volume:
 	@echo "WARNING: removing $(VOLUME) erases saved Claude credentials. Next run requires 'make login' or interactive login on first use."
 	-docker volume rm $(VOLUME)
 
-clean-dind-data:
-	@vols=$$(docker volume ls -q --filter name='^cloude-dind-'); \
-	if [ -n "$$vols" ]; then \
-		echo "Removing per-task DinD volumes:"; echo "$$vols"; \
-		echo "$$vols" | xargs docker volume rm; \
-	else \
-		echo "No cloude-dind-* volumes to remove."; \
-	fi
-
-clean: clean-image clean-volume clean-dind-data
+clean: clean-image clean-volume
