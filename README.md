@@ -248,13 +248,22 @@ commands:
 
 - **`/promote`** — Promote an idea from `tasks/staging.org` into an
   active task. Interactive: lists ideas grouped by project, asks which
-  to promote, auto-slugs the heading. Then creates the active task
-  file under `tasks/active/`, a `cloude/<slug>` branch in the
-  project's repo, a worktree under `worktrees/<repo-name>/<slug>`, a
-  draft PR, and a detached tmux session named `cloude-<slug>`. Source
-  clones are kept in `repos/<repo-name>` (auto-cloned on first use);
-  worktrees share that clone's git object store. Both `repos/` and
-  `worktrees/` are gitignored.
+  to promote, auto-slugs the heading. Two modes:
+  - **Standard**: creates the active task file under `tasks/active/`,
+    a `cloude/<slug>` branch in the project's repo off the default
+    branch, a worktree under `worktrees/<repo-name>/<slug>`, a draft
+    PR, and a detached tmux session named `cloude-<slug>`. Starts in
+    `PLANNING :user:`.
+  - **ADOPT**: triggered when the staging idea is `ADOPT <PR url>`.
+    No new branch or PR — checks out the existing PR's branch as a
+    worktree, uses the PR's title for the task heading, and starts in
+    `ITERATING :user:` so the user can direct the agent on what to do
+    with the adopted work. Refuses to adopt closed/merged or
+    cross-repository (forked) PRs.
+
+  Source clones are kept in `repos/<repo-name>` (auto-cloned on first
+  use); worktrees share that clone's git object store. Both `repos/`
+  and `worktrees/` are gitignored.
 - **`/finalize`** — Finalize an active task and perform the cleanup
   the in-container agent can't do (the cloude repo is mounted ro from
   inside the container). Interactive: lists active tasks with their
