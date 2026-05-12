@@ -142,6 +142,34 @@ whenever an agent is attached).
    `tasks/completed/`; when it reaches `DROPPED`, move the file into
    `tasks/dropped/`. Filename unchanged in either case.
 
+## Dashboard
+
+`bin/cloude-dash` is a curses TUI that surfaces the state of every task
+in one screen. It parses each `tasks/**/*.org` file with `orgparse` and
+renders three sections:
+
+- **ACTIVE** — one row per file in `tasks/active/`, sorted by stage
+  priority (`MERGING` first, then `REVIEW`, `ITERATING`, `PLANNING`).
+  Each row shows the TODO keyword, who currently has the ball
+  (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading, and
+  the PR number from the `:PR:` property.
+- **STAGING** — every idea sub-heading from `tasks/staging.org`.
+- **RECENT** — the 20 most-recently-touched files from
+  `tasks/completed/` and `tasks/dropped/`.
+
+Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `Enter`
+opens the highlighted task's PR in the default browser, `r` reloads,
+`q` quits.
+
+```sh
+bin/cloude-dash
+```
+
+The script has a PEP 723 inline-dependency header, so the recommended
+launcher is `uv` — it handles the `orgparse` install transparently.
+If `uv` isn't available, `pip install --user orgparse` then run the
+script with `python3`.
+
 ## Running tasks in Docker
 
 Each active task can be run inside a sandboxed Docker container with
@@ -282,6 +310,15 @@ commands:
   Refuses to drop from `COMPLETE` (work already landed); no-op
   from `DROPPED`. Reminds the agent that the host now needs
   `/sweep` (or `/finalize` directly) to do the actual cleanup.
+- **`/babysit-ci`** *(in-container)* — Monitor CI on the task's PR
+  autonomously after a push. Push-driven: kicks off `gh pr checks
+  --watch` as a background bash; the harness fires a new turn when
+  the watch returns. On that turn, the agent reads the result —
+  green stops the loop, failures get diagnosed, fixed (commit +
+  push), and watched again. Budgets: 2h wall-clock, 3 post-fix
+  retries per failing check. On bail, flips the heading tag to
+  `:user:` so the user knows attention is needed. Zero token cost
+  during the watch — Claude is fully idle until CI ends.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,
