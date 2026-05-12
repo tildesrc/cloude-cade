@@ -127,6 +127,7 @@ exec docker run --rm -it --privileged \
     "${DOCKER_CFG_MOUNT[@]}" \
     "${GH_TOKEN_ENV[@]}" \
     -e "CLOUDE_TASK_FILE=$TASK_FILE" \
+    -e "CLOUDE_ROOT=$CLOUDE" \
     -w "$WORKTREE" \
     cloude \
     claude --dangerously-skip-permissions

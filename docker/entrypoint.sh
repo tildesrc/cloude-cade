@@ -46,6 +46,42 @@ persist_claude_json() {
 }
 trap persist_claude_json EXIT
 
+# --- Cloude in-container slash commands -------------------------------
+#
+# Claude Code's project commands are scoped to the cwd's nearest
+# .git-rooted ancestor. Inside the container, that's the worktree
+# (its own .git → an external project), so cloude/.claude/commands
+# isn't auto-discovered. Surface the in-container-relevant cloude
+# skills as user-scoped commands by symlinking them into
+# ~/.claude/commands (which lives in the persist volume).
+#
+# Host-only commands (/promote, /finalize, /sweep) are deliberately
+# excluded — they depend on host-side state and would error.
+if [[ -n "${CLOUDE_ROOT:-}" && -d "$CLOUDE_ROOT/.claude/commands" ]]; then
+    USER_CMDS="$PERSIST/dot-claude/commands"
+    IN_CONTAINER_CMDS=(advance iterate drop babysit-ci)
+
+    mkdir -p "$USER_CMDS"
+
+    # Remove any previous symlinks that pointed into the cloude repo
+    # (handles cases where IN_CONTAINER_CMDS shrinks between launches).
+    for link in "$USER_CMDS"/*.md; do
+        [[ -L "$link" ]] || continue
+        target="$(readlink -f "$link" 2>/dev/null || true)"
+        case "$target" in
+            "$CLOUDE_ROOT"/.claude/commands/*) rm -f "$link" ;;
+        esac
+    done
+
+    # Install the current list as symlinks.
+    for cmd in "${IN_CONTAINER_CMDS[@]}"; do
+        src="$CLOUDE_ROOT/.claude/commands/$cmd.md"
+        [[ -f "$src" ]] && ln -sf "$src" "$USER_CMDS/$cmd.md"
+    done
+
+    chown -hR cloude:cloude "$USER_CMDS" 2>/dev/null || true
+fi
+
 # --- dockerd (DinD) ---------------------------------------------------
 mkdir -p /var/log
 dockerd >/var/log/dockerd.log 2>&1 &
