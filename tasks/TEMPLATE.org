@@ -39,3 +39,7 @@
    Free-form scratch space. State transitions are logged automatically
    in the LOGBOOK drawer below the heading - prose history doesn't need
    to live here.
+
+# Local Variables:
+# eval: (auto-revert-mode 1)
+# End:
