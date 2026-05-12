@@ -72,6 +72,21 @@ from the host via the `/finalize` slash command (the cloude repo is
 mounted read-only inside the container, so the agent can't perform
 the move itself).
 
+To actually flip the TODO keyword and tag, prefer the in-container
+slash commands over editing the heading by hand:
+
+- `/advance` — forward to the next stage. Surfaces the current
+  stage's DoD checklist and complains if anything's unmet before
+  performing the transition.
+- `/iterate` — back into `ITERATING` (used when review comments come
+  in or a merge breaks).
+- `/drop` — to `DROPPED` from any non-terminal state. Reminds you
+  that the host then needs `/sweep` / `/finalize` to clean up.
+
+The "forward transitions out of PLANNING/ITERATING/REVIEW are
+user-driven only" rule above is still your responsibility; `/advance`
+is mechanical and won't enforce it.
+
 ### Stage details
 
 #### PLANNING

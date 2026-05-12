@@ -264,6 +264,24 @@ commands:
   Source clones are kept in `repos/<repo-name>` (auto-cloned on first
   use); worktrees share that clone's git object store. Both `repos/`
   and `worktrees/` are gitignored.
+- **`/advance`** *(in-container)* — Advance the task's TODO keyword
+  forward to the next workflow stage (`PLANNING → ITERATING →
+  REVIEW → MERGING → COMPLETE`). Loads the current stage's
+  Definition of Done from `CLAUDE.md`, evaluates each item
+  (programmatically where it can — PR exists, CI status, git
+  clean — and via the agent's judgment for the rest), and
+  complains (lists unmet items + asks for explicit confirm)
+  before the transition lands. Only edits `$CLOUDE_TASK_FILE`;
+  the host sees the diff afterward.
+- **`/iterate`** *(in-container)* — Flip the TODO keyword back to
+  `ITERATING` (with `:agent:` tag). Used when review comments come
+  in on a `REVIEW` PR, or a `MERGING` task hits a merge break. No
+  preconditions; mechanical.
+- **`/drop`** *(in-container)* — Flip the TODO keyword to
+  `DROPPED` (with `:user:` tag) from any non-terminal state.
+  Refuses to drop from `COMPLETE` (work already landed); no-op
+  from `DROPPED`. Reminds the agent that the host now needs
+  `/sweep` (or `/finalize` directly) to do the actual cleanup.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,
