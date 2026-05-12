@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["orgparse>=0.4"]
+# dependencies = ["orgparse>=0.4", "inotify_simple>=1.3"]
 # ///
 # Curses dashboard for the state of all cloude tasks.
 #
@@ -17,6 +17,7 @@ import curses
 import os
 import subprocess
 import sys
+import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,16 @@ except ModuleNotFoundError:
         "cloude-dash: orgparse is required.\n"
         "Launch via 'uv run bin/cloude-dash' (uv handles deps automatically),\n"
         "or 'pip install --user orgparse' and rerun.\n"
+    )
+    sys.exit(1)
+
+try:
+    from inotify_simple import INotify, flags as inotify_flags
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-dash: inotify_simple is required.\n"
+        "Launch via 'uv run bin/cloude-dash' (uv handles deps automatically),\n"
+        "or 'pip install --user inotify_simple' and rerun.\n"
     )
     sys.exit(1)
 
@@ -285,6 +296,26 @@ def _move_selection(rows, sel: int, delta: int) -> int:
     return selectables[idx]
 
 
+def _setup_inotify() -> INotify:
+    """Watch the tasks/ dir + each subdir so we auto-reload when files
+    appear, disappear, or change. We watch the dirs (not individual
+    files) so atomic-rename saves and /promote /finalize file moves
+    are all caught."""
+    watch_flags = (
+        inotify_flags.CREATE
+        | inotify_flags.DELETE
+        | inotify_flags.MODIFY
+        | inotify_flags.MOVED_TO
+        | inotify_flags.MOVED_FROM
+        | inotify_flags.CLOSE_WRITE
+    )
+    inot = INotify()
+    for d in (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped"):
+        if d.is_dir():
+            inot.add_watch(str(d), watch_flags)
+    return inot
+
+
 def _run(stdscr) -> None:
     curses.curs_set(0)
     if curses.has_colors():
@@ -294,11 +325,23 @@ def _run(stdscr) -> None:
         curses.init_pair(2, curses.COLOR_YELLOW, -1)  # user
         curses.init_pair(3, curses.COLOR_RED, -1)     # blocked
 
+    inot = _setup_inotify()
+    stdscr.timeout(500)  # getch() returns -1 after 500ms of no input
+
     groups = load_tasks()
     rows = _flatten(groups)
     selectables = _selectable_indices(rows)
     selected = selectables[0] if selectables else 0
     status = ""
+
+    def reload(label: str) -> tuple[list, int, str]:
+        groups = load_tasks()
+        rows = _flatten(groups)
+        sels = _selectable_indices(rows)
+        sel = selected
+        if sels and sel not in sels:
+            sel = sels[0]
+        return rows, sel, label
 
     while True:
         _draw(stdscr, rows, selected, status)
@@ -307,6 +350,17 @@ def _run(stdscr) -> None:
             ch = stdscr.getch()
         except KeyboardInterrupt:
             return
+
+        if ch == -1:
+            # idle tick — drain inotify and auto-reload if anything changed.
+            events = inot.read(timeout=0)
+            if events:
+                # debounce: editor save often fires several events; coalesce.
+                time.sleep(0.05)
+                events += inot.read(timeout=0)
+                rows, selected, status = reload("auto-reloaded")
+            continue
+
         if ch in (ord("q"), 27):  # q or ESC
             return
         elif ch in (curses.KEY_DOWN, ord("j")):
@@ -322,12 +376,7 @@ def _run(stdscr) -> None:
             if sels:
                 selected = sels[-1]
         elif ch == ord("r"):
-            groups = load_tasks()
-            rows = _flatten(groups)
-            sels = _selectable_indices(rows)
-            if sels and selected not in sels:
-                selected = sels[0]
-            status = "reloaded"
+            rows, selected, status = reload("reloaded")
         elif ch == ord("p"):
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
