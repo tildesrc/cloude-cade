@@ -8,7 +8,9 @@ The cloude repo root (current working directory when this command was invoked) i
 
 ## 1. Show active tasks and pick one
 
-List the files under `tasks/active/`. For each, parse the top-level heading to extract:
+If a caller (e.g. `/sweep`) has already chosen the task, skip the picker and use that selection — go straight to step 2 with the chosen `tasks/active/<filename>.org`.
+
+Otherwise: list the files under `tasks/active/`. For each, parse the top-level heading to extract:
 
 - the **TODO keyword** (the first whitespace-separated word after the leading `*`)
 - the **heading text** (everything between the keyword and any trailing org tags)

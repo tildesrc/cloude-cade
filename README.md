@@ -264,6 +264,13 @@ commands:
   Source clones are kept in `repos/<repo-name>` (auto-cloned on first
   use); worktrees share that clone's git object store. Both `repos/`
   and `worktrees/` are gitignored.
+- **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
+  already `COMPLETE` or `DROPPED` (the in-container agent has flipped
+  the state but the file is still in `active/`). For each candidate,
+  prompts you per-task with `Approve /finalize for <task>? [y/N/skip]`
+  and only invokes `/finalize` on an explicit `y`. Quick to run (one
+  line of output when nothing's pending), so safe to drive on a `/loop`
+  poll (e.g. `/loop 1m /sweep`) in your main host session.
 - **`/finalize`** — Finalize an active task and perform the cleanup
   the in-container agent can't do (the cloude repo is mounted ro from
   inside the container). Interactive: lists active tasks with their
