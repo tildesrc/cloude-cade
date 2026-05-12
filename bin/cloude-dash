@@ -1,0 +1,355 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["orgparse>=0.4"]
+# ///
+# Curses dashboard for the state of all cloude tasks.
+#
+# Reads every org file under tasks/ (active, staging, completed, dropped)
+# and renders a single ranked view: active first (sorted by stage
+# priority), then staging ideas, then a tail of recently
+# completed/dropped tasks. Enter on a row with a :PR: property opens
+# the PR in the default browser.
+
+from __future__ import annotations
+
+import curses
+import os
+import subprocess
+import sys
+import webbrowser
+from dataclasses import dataclass
+from pathlib import Path
+
+try:
+    import orgparse
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-dash: orgparse is required.\n"
+        "Launch via 'uv run bin/cloude-dash' (uv handles deps automatically),\n"
+        "or 'pip install --user orgparse' and rerun.\n"
+    )
+    sys.exit(1)
+
+
+CLOUDE_ROOT = Path(__file__).resolve().parent.parent
+TASKS = CLOUDE_ROOT / "tasks"
+
+ACTIVE = "ACTIVE"
+STAGING = "STAGING"
+RECENT = "RECENT"
+
+STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
+BALL_TAGS = ("agent", "user", "blocked")
+RECENT_LIMIT = 20
+
+
+@dataclass
+class Task:
+    section: str
+    state: str          # TODO keyword, or "" for staging ideas
+    tag: str            # "agent" / "user" / "blocked" / ""
+    title: str
+    pr_url: str | None
+    path: Path
+    mtime: float
+
+
+def _ball_tag(tags) -> str:
+    for t in BALL_TAGS:
+        if t in tags:
+            return t
+    return ""
+
+
+def _load_single_task_file(path: Path, section: str) -> Task | None:
+    try:
+        root = orgparse.load(str(path))
+    except Exception:
+        return None
+    headings = [n for n in root.children]
+    if not headings:
+        return None
+    h = headings[0]
+    props = dict(h.properties) if h.properties else {}
+    pr = props.get("PR") or None
+    return Task(
+        section=section,
+        state=(h.todo or "").strip(),
+        tag=_ball_tag(h.tags),
+        title=str(h.heading).strip(),
+        pr_url=pr if pr else None,
+        path=path,
+        mtime=path.stat().st_mtime,
+    )
+
+
+def _load_staging(path: Path) -> list[Task]:
+    if not path.exists():
+        return []
+    try:
+        root = orgparse.load(str(path))
+    except Exception:
+        return []
+    out: list[Task] = []
+    for project in root.children:
+        for idea in project.children:
+            out.append(
+                Task(
+                    section=STAGING,
+                    state="",
+                    tag=_ball_tag(idea.tags),
+                    title=str(idea.heading).strip(),
+                    pr_url=None,
+                    path=path,
+                    mtime=path.stat().st_mtime,
+                )
+            )
+    return out
+
+
+def load_tasks() -> dict[str, list[Task]]:
+    active: list[Task] = []
+    for p in sorted((TASKS / "active").glob("*.org")):
+        t = _load_single_task_file(p, ACTIVE)
+        if t:
+            active.append(t)
+    active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
+
+    staging = _load_staging(TASKS / "staging.org")
+
+    recent: list[Task] = []
+    for sub, label in (("completed", "COMPLETE"), ("dropped", "DROPPED")):
+        d = TASKS / sub
+        if not d.exists():
+            continue
+        for p in d.glob("*.org"):
+            t = _load_single_task_file(p, RECENT)
+            if t:
+                if not t.state:
+                    t.state = label
+                recent.append(t)
+    recent.sort(key=lambda t: t.mtime, reverse=True)
+    recent = recent[:RECENT_LIMIT]
+
+    return {ACTIVE: active, STAGING: staging, RECENT: recent}
+
+
+# --- rendering -------------------------------------------------------------
+
+# Row kinds for the flattened display list.
+ROW_HEADER = "header"
+ROW_TASK = "task"
+ROW_EMPTY = "empty"
+
+
+def _flatten(groups: dict[str, list[Task]]) -> list[tuple[str, object]]:
+    rows: list[tuple[str, object]] = []
+    for section in (ACTIVE, STAGING, RECENT):
+        items = groups[section]
+        label = {
+            ACTIVE: f"ACTIVE ({len(items)})",
+            STAGING: f"STAGING ({len(items)})",
+            RECENT: f"RECENT ({len(items)})",
+        }[section]
+        rows.append((ROW_HEADER, label))
+        if not items:
+            rows.append((ROW_EMPTY, None))
+            continue
+        for t in items:
+            rows.append((ROW_TASK, t))
+    return rows
+
+
+def _selectable_indices(rows) -> list[int]:
+    return [i for i, (kind, _) in enumerate(rows) if kind == ROW_TASK]
+
+
+def _pr_number(url: str | None) -> str:
+    if not url:
+        return ""
+    tail = url.rstrip("/").split("/")[-1]
+    return f"PR #{tail}" if tail.isdigit() else url
+
+
+def _date_from_filename(path: Path) -> str:
+    name = path.stem
+    return name[:10] if len(name) >= 10 and name[4] == "-" else ""
+
+
+def _slug_from_filename(path: Path) -> str:
+    name = path.stem
+    return name[11:] if len(name) > 11 and name[4] == "-" else name
+
+
+def _tmux_session_for(t: Task) -> str | None:
+    if t.section != ACTIVE:
+        return None
+    slug = _slug_from_filename(t.path)
+    return f"cloude-{slug}" if slug else None
+
+
+def _switch_tmux(stdscr, t: Task) -> str:
+    session = _tmux_session_for(t)
+    if not session:
+        return "(no tmux session: not an active task)"
+    has = subprocess.run(
+        ["tmux", "has-session", "-t", f"={session}"],
+        capture_output=True,
+    )
+    if has.returncode != 0:
+        return f"(no tmux session: {session})"
+    if os.environ.get("TMUX"):
+        r = subprocess.run(
+            ["tmux", "switch-client", "-t", session],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return f"(tmux switch-client failed: {r.stderr.strip()})"
+        return f"switched to {session}"
+    # Outside tmux: suspend curses, attach inline; resume on detach.
+    curses.endwin()
+    try:
+        subprocess.run(["tmux", "attach", "-t", session])
+    finally:
+        stdscr.clear()
+        stdscr.refresh()
+        curses.doupdate()
+    return f"detached from {session}"
+
+
+def _color(stdscr, tag: str) -> int:
+    if not curses.has_colors():
+        return 0
+    return {
+        "agent": curses.color_pair(1),
+        "user": curses.color_pair(2),
+        "blocked": curses.color_pair(3),
+    }.get(tag, 0)
+
+
+def _draw(stdscr, rows, selected: int, status: str) -> None:
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+    title = "cloude tasks"
+    hint = "↑/↓ move  p open PR  t tmux  r reload  q quit"
+    stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
+    if len(title) + len(hint) + 2 < w:
+        stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
+
+    y = 2
+    for i, (kind, payload) in enumerate(rows):
+        if y >= h - 1:
+            break
+        if kind == ROW_HEADER:
+            stdscr.addnstr(y, 0, str(payload), w - 1, curses.A_BOLD | curses.A_UNDERLINE)
+        elif kind == ROW_EMPTY:
+            stdscr.addnstr(y, 2, "(none)", w - 3, curses.A_DIM)
+        elif kind == ROW_TASK:
+            t: Task = payload  # type: ignore[assignment]
+            marker = ">" if i == selected else " "
+            attr = curses.A_REVERSE if i == selected else 0
+            state = (t.state or "—").ljust(9)
+            tag = f":{t.tag}:".ljust(10) if t.tag else "".ljust(10)
+            if t.section == RECENT:
+                date = _date_from_filename(t.path)
+                slug = _slug_from_filename(t.path)
+                line = f"{marker} {state} {date}  {slug}"
+            else:
+                line = f"{marker} {state} {tag} {t.title}"
+                pr = _pr_number(t.pr_url)
+                pad = max(1, w - 1 - len(line) - len(pr))
+                line = line + (" " * pad) + pr
+            stdscr.addnstr(y, 0, line, w - 1, attr)
+            if t.tag and t.section != RECENT and not attr:
+                tag_str = f":{t.tag}:"
+                tag_col = 2 + len(state) + 1
+                if tag_col + len(tag_str) < w:
+                    stdscr.addnstr(y, tag_col, tag_str, len(tag_str), _color(stdscr, t.tag))
+        y += 1
+
+    if status:
+        stdscr.addnstr(h - 1, 0, status, w - 1, curses.A_DIM)
+    stdscr.refresh()
+
+
+def _move_selection(rows, sel: int, delta: int) -> int:
+    selectables = _selectable_indices(rows)
+    if not selectables:
+        return sel
+    if sel not in selectables:
+        return selectables[0]
+    idx = selectables.index(sel)
+    idx = max(0, min(len(selectables) - 1, idx + delta))
+    return selectables[idx]
+
+
+def _run(stdscr) -> None:
+    curses.curs_set(0)
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_GREEN, -1)   # agent
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)  # user
+        curses.init_pair(3, curses.COLOR_RED, -1)     # blocked
+
+    groups = load_tasks()
+    rows = _flatten(groups)
+    selectables = _selectable_indices(rows)
+    selected = selectables[0] if selectables else 0
+    status = ""
+
+    while True:
+        _draw(stdscr, rows, selected, status)
+        status = ""
+        try:
+            ch = stdscr.getch()
+        except KeyboardInterrupt:
+            return
+        if ch in (ord("q"), 27):  # q or ESC
+            return
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            selected = _move_selection(rows, selected, +1)
+        elif ch in (curses.KEY_UP, ord("k")):
+            selected = _move_selection(rows, selected, -1)
+        elif ch == ord("g"):
+            sels = _selectable_indices(rows)
+            if sels:
+                selected = sels[0]
+        elif ch == ord("G"):
+            sels = _selectable_indices(rows)
+            if sels:
+                selected = sels[-1]
+        elif ch == ord("r"):
+            groups = load_tasks()
+            rows = _flatten(groups)
+            sels = _selectable_indices(rows)
+            if sels and selected not in sels:
+                selected = sels[0]
+            status = "reloaded"
+        elif ch == ord("p"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                if t.pr_url:
+                    webbrowser.open(t.pr_url)
+                    status = f"opened {t.pr_url}"
+                else:
+                    status = "(no PR)"
+        elif ch == ord("t"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                status = _switch_tmux(stdscr, t)
+
+
+def main() -> int:
+    if not TASKS.is_dir():
+        sys.stderr.write(f"cloude-dash: tasks dir not found at {TASKS}\n")
+        return 1
+    os.environ.setdefault("ESCDELAY", "25")
+    curses.wrapper(_run)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

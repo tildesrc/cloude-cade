@@ -157,9 +157,11 @@ renders three sections:
 - **RECENT** — the 20 most-recently-touched files from
   `tasks/completed/` and `tasks/dropped/`.
 
-Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `Enter`
-opens the highlighted task's PR in the default browser, `r` reloads,
-`q` quits.
+Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `p` opens
+the highlighted task's PR in the default browser, `t` switches to its
+`cloude-<slug>` tmux session (uses `tmux switch-client` when the
+dashboard is already inside tmux, otherwise `tmux attach`), `r`
+reloads, `q` quits.
 
 ```sh
 bin/cloude-dash
