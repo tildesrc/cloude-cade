@@ -47,21 +47,99 @@ Rules when working on a task:
 ### Workflow states
 
 The TODO keywords are: `PLANNING`, `ITERATING`, `REVIEW`, `MERGING`,
-`COMPLETE`, `DROPPED`. **Read the "Stage details" section of
-`README.md` for the responsibilities and definition of done (DoD) of
-each state — that is the canonical spec of what you must accomplish in
-each stage.**
+`COMPLETE`, `DROPPED`.
+
+**On every new session, read your task file first.** When running
+inside a container, the absolute path is in the `CLOUDE_TASK_FILE`
+env var. The TODO keyword on the heading is your current stage; the
+per-stage responsibilities and DoD below tell you what to do and how
+to know you're finished.
 
 **Forward transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are
 user-driven only.** Do not advance these states on your own — finish
-your work, set the heading's tag to `:user:`, and wait for the user to
-move the task forward (or send you back with feedback). Transitioning
-to `DROPPED` is allowed from any state but should also generally be a
-user decision unless you have explicit authorization.
+your work to the stage's DoD, set the heading's tag to `:user:`, and
+wait for the user to move the task forward (or send you back with
+feedback). Transitioning to `DROPPED` is allowed from any state but
+should also generally be a user decision unless you have explicit
+authorization.
 
-`MERGING` is different: it's an agent-driven stage where you actively
-work to land the PR — handling CI failures and trivial merge conflicts.
-Advance to `COMPLETE` yourself once the merge has actually landed.
+`MERGING`, `COMPLETE`, and `DROPPED` are agent-advanceable: do the
+work to meet the DoD, then update the TODO state yourself. For
+`MERGING` that means actively managing the merge — re-adding to the
+queue on flaky failures, resolving trivial conflicts — and flipping
+to `COMPLETE` once the merge has landed.
+
+### Stage details
+
+#### PLANNING
+
+**Responsibilities**
+- Collect requirements.
+- Produce a plan for the implementation.
+
+**Definition of done**
+- The plan is written into the task's org file.
+- The user has approved the plan.
+- A draft PR has been created on GitHub.
+
+#### ITERATING
+
+**Responsibilities**
+- Implement the plan.
+- Implement any additional user requests or feedback.
+- Implement any review comments the user has approved for
+  implementation.
+
+**Definition of done**
+- The plan is implemented in code.
+- All user requests are implemented in code.
+- New and relevant tests pass locally.
+- Changes are committed and pushed.
+- CI tests are passing, or any failures can be attributed to
+  irrelevant flakes.
+
+#### REVIEW
+
+**Responsibilities**
+- Wait for review or approval of the PR.
+
+**Definition of done**
+- The PR has been reviewed.
+
+#### MERGING
+
+**Responsibilities**
+- Add the PR to the merge queue.
+- If the PR exits the merge queue, re-add it.
+
+**Definition of done**
+- The PR is merged.
+
+#### COMPLETE (terminal)
+
+**Responsibilities**
+- Move the task's org file from `tasks/active/` to `tasks/completed/`.
+
+**Definition of done**
+- The file is in `tasks/completed/`.
+
+#### DROPPED (terminal)
+
+**Responsibilities**
+- Move the task's org file from `tasks/active/` to `tasks/dropped/`.
+
+**Definition of done**
+- The file is in `tasks/dropped/`.
+
+#### Per-stage tag defaults
+
+- `PLANNING`, `ITERATING` — `:agent:` while you're working, `:user:`
+  when waiting for feedback, `:blocked:` if waiting on something
+  external.
+- `REVIEW` — `:blocked:` by default (waiting on peer reviewers). Flip
+  to `:user:` if reviewers leave comments that need a triage decision.
+- `MERGING` — `:agent:` while you manage the merge queue, `:user:` if
+  something requires human judgment to resolve.
 
 ### Who-has-the-ball tag
 
@@ -89,6 +167,9 @@ in mind:
 - The cloude repo, the task's worktree, and the task's active `.org`
   file are all mounted at the **same absolute paths** they have on the
   host. Cite paths verbatim — they're identical inside and out.
+- Your specific task file path is exported as `$CLOUDE_TASK_FILE`.
+  Read it at the start of every session to determine your current
+  stage (the TODO keyword on the heading) before deciding what to do.
 - The container has Docker-in-Docker, so `docker compose` works for
   spinning up the project's dev environment. The agent runs as an
   unprivileged user; only `dockerd` is privileged.
