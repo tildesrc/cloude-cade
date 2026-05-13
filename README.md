@@ -331,6 +331,19 @@ commands:
   check (and per conflict cycle). On bail, flips the heading tag to
   `:user:` so the user knows attention is needed. Zero token cost
   during the watch — Claude is fully idle until CI ends.
+- **`/babysit-merge`** *(in-container)* — MERGING-stage equivalent
+  of `/babysit-ci`. Adds the PR to the repo's merge queue, watches
+  via background bash, re-queues on transient ejections — "keep
+  re-adding until it merges." On a successful merge, **auto-advances
+  the heading to `COMPLETE :user:`** (the one forward transition
+  CLAUDE.md designates agent-advanceable, since `/sweep` on the host
+  then surfaces it for `/finalize`). On any blocking condition
+  (failing required check, requested changes, merge conflict, branch
+  protection refusal), **kicks the task back to `ITERATING :user:`**
+  with a one-paragraph explanation appended to `** Notes` —
+  conflict resolution is `/babysit-ci`'s job during ITERATING, not
+  this skill's. Budget: 2h wall-clock; no fixed cap on re-queue
+  attempts.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,

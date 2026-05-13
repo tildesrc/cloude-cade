@@ -59,7 +59,7 @@ trap persist_claude_json EXIT
 # excluded — they depend on host-side state and would error.
 if [[ -n "${CLOUDE_ROOT:-}" && -d "$CLOUDE_ROOT/.claude/commands" ]]; then
     USER_CMDS="$PERSIST/dot-claude/commands"
-    IN_CONTAINER_CMDS=(advance iterate drop babysit-ci)
+    IN_CONTAINER_CMDS=(advance iterate drop babysit-ci babysit-merge)
 
     mkdir -p "$USER_CMDS"
 

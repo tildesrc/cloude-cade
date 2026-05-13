@@ -93,7 +93,7 @@ Advanced: <CURRENT_STATE> :<old-tag>:  →  <NEXT_STATE> :<new-tag>:
 **If the new tag is `:agent:`, do not stop here — immediately begin executing the new stage's responsibilities.** The user's `/advance` invocation IS their go-ahead; don't ask "should I…?" before starting work the stage explicitly assigns to the agent (per `CLAUDE.md`'s Stage details). Examples:
 
 - `→ ITERATING :agent:` — start implementing the plan in the task file's `** Plan` section (or whatever feedback the user has just given you).
-- `→ MERGING :agent:` — add the PR to the repo's merge queue (`gh pr merge --auto --squash` or the project-appropriate variant — check the project's CLAUDE.md / Makefile for conventions), then kick off `/loop /babysit-ci` to watch the merge land. Flip the tag to `:user:` only if something genuinely needs your call (merge conflict you can't resolve, CI failure that requires direction).
+- `→ MERGING :agent:` — invoke `/babysit-merge`. That skill owns the full MERGING lifecycle: it adds the PR to the merge queue, watches via background bash, re-queues on transient ejections, auto-advances to `COMPLETE :user:` on success, and kicks back to `ITERATING :user:` with a Notes explanation if anything blocking shows up (failing required check, requested changes, merge conflict). Don't reimplement that loop inline; just call `/babysit-merge`.
 
 If the new tag is `:user:` or `:blocked:`, stop here. `:user:` means the next move is the user's; `:blocked:` means you're waiting on something external. Don't poke the user; don't try to make progress on a stage that isn't actively agent-driven.
 
