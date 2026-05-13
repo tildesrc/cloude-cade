@@ -53,7 +53,15 @@ Use `BashOutput(bash_id=<watch_bash_id>)` to read the captured stdout/stderr fro
 
 Parse the output to know the final state of each check. `gh pr checks --watch` prints a check-by-check status table; the last block of output is the final state.
 
-Two branches:
+**Before branching on CI status, check for merge conflicts.** A conflict against the base branch can appear at any time — the base moves while the agent iterates, a sibling PR touches overlapping files, etc. Resolving conflicts is part of `/babysit-ci`'s job; don't kick that back to the user.
+
+```
+gh pr view <pr-url> --json mergeable,mergeStateStatus,baseRefName
+```
+
+If `mergeable == "CONFLICTING"` (or `mergeStateStatus` is `DIRTY`), jump to **step 4c** below before evaluating CI checks. CI failures often turn out to be downstream of an unmerged base, so resolving the conflict first usually makes them go away on the next run.
+
+Otherwise branch on CI status:
 
 ### 4a. All checks passing → flip to :user: and exit
 
@@ -93,6 +101,26 @@ After handling all failures:
 - Update state: `last_head_sha = current HEAD`, `watch_bash_id = null`, updated `failed_check_retries`.
 - Save state file.
 - Fall through to step 5 (start a new watch on the new push).
+
+### 4c. Merge conflict → resolve and re-watch
+
+Triggered from the pre-branch check at the top of step 4 (`mergeable == "CONFLICTING"`). Resolve autonomously when feasible; bail to `:user:` only when the conflict genuinely needs human judgment.
+
+1. **Pull the latest base** (`baseRefName` from the same `gh pr view` query):
+   ```
+   git -C <worktree> fetch origin <baseRefName>
+   ```
+2. **Attempt the merge**:
+   ```
+   git -C <worktree> merge origin/<baseRefName>
+   ```
+   If `git merge` completes without prompting (no conflicts after the auto-merge), commit if needed and push. Done with this iteration — fall through to step 5 to re-arm the watch.
+3. **If `git merge` reports conflicts**, inspect each conflicted file:
+   - **Trivial conflicts** — adjacent unrelated edits, append-only conflicts in `Gemfile.lock` / `package-lock.json`-style generated files, both branches adding to the same list without overlap, formatting-only changes. Resolve, re-run any relevant local test, `git add` the resolved files, complete the merge (`git commit` or `git merge --continue`), and push.
+   - **Non-trivial conflicts** — semantic overlap, both branches editing the same logic, code you don't have context for, anything that requires a real judgment call. **Bail to `:user:`** with a note in `** Notes` listing the conflicted files and why you couldn't resolve them. Don't guess on contentious merges; user attention is the right call here.
+4. **Retry budgeting**: track conflict cycles under the same per-check retry mechanism using a synthetic key like `"_merge_conflict"` in `failed_check_retries`. If conflict cycles repeat 3 times after fix attempts (e.g., the base keeps moving and re-conflicting), bail with note "babysit-ci: merge conflicts keep re-appearing after 3 resolution attempts; needs human review".
+5. **Combined with CI failures**: if there's both a conflict AND failing checks, resolve the conflict first. The push from step 3 (or 2) re-triggers CI, and the next watch cycle will show whether the failures resolved on their own.
+6. After a successful resolution + push: update state (`last_head_sha = current HEAD`, `watch_bash_id = null`), save, fall through to step 5.
 
 ## 5. Fresh-start: kick off the background watch and exit
 

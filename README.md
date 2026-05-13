@@ -323,9 +323,13 @@ commands:
   **green flips the heading tag to `:user:` and stops** (does not
   auto-advance the TODO state — advancing forward is user-driven),
   failures get diagnosed, fixed (commit + push), and watched again.
-  Budgets: 2h wall-clock, 3 post-fix retries per failing check. On
-  bail, flips the heading tag to `:user:` so the user knows
-  attention is needed. Zero token cost
+  **Merge conflicts** against the base branch are also part of the
+  job: the agent merges the latest base in, resolves trivial
+  conflicts (lockfiles, append-only, formatting), and re-pushes —
+  bailing to `:user:` only when a conflict genuinely needs human
+  judgment. Budgets: 2h wall-clock, 3 post-fix retries per failing
+  check (and per conflict cycle). On bail, flips the heading tag to
+  `:user:` so the user knows attention is needed. Zero token cost
   during the watch — Claude is fully idle until CI ends.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
