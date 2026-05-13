@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLOUDE_ROOT/bin/cloude-on-plan-accepted"
+          }
+        ]
+      }
+    ]
+  }
+}

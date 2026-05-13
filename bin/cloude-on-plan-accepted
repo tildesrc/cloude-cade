@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""PostToolUse:ExitPlanMode hook handler.
+
+When the user accepts a plan via Claude Code's plan mode, and the
+in-container task is in PLANNING state:
+  1. Write the plan content into the task file's ** Plan section
+     (insert if absent, replace if present).
+  2. Flip the heading's TODO PLANNING -> ITERATING and tag -> :agent:.
+
+The /advance skill's :agent:-tag rule then takes over and the agent
+begins implementing on its next turn. Together (1) + (2) leave the
+on-disk state matching what an explicit /advance from PLANNING would
+have produced: PLANNING's DoD ("plan is written into the task's org
+file") is satisfied without a separate human step.
+
+Only fires when:
+  - $CLOUDE_TASK_FILE is set and points to an existing file
+  - the task heading's current TODO keyword is exactly PLANNING
+Other cases (plan mode mid-ITERATING, plan mode outside a cloude
+task, etc.) are silent no-ops.
+
+Registered via /etc/cloude/settings.json, which bin/cloude-run wires
+in by passing `--settings /etc/cloude/settings.json` to claude.
+"""
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    task = os.environ.get("CLOUDE_TASK_FILE")
+    if not task or not Path(task).is_file():
+        return 0  # not running against a cloude task
+
+    content = Path(task).read_text()
+
+    # Only act when the task is currently in PLANNING. Don't surprise-flip
+    # mid-stage if the user invokes plan mode for an ad-hoc clarification.
+    heading_match = re.search(r"^\*\s+(\S+)", content, re.M)
+    if not heading_match or heading_match.group(1) != "PLANNING":
+        return 0
+
+    plan = extract_plan_content()
+
+    if plan:
+        content = upsert_plan_section(content, plan)
+
+    content = flip_planning_to_iterating(content)
+
+    Path(task).write_text(content)
+
+    print(
+        "[cloude] Plan accepted; task auto-advanced PLANNING → ITERATING :agent:.\n"
+        "Plan written to the ** Plan section of the task file.\n"
+        "Begin implementing per CLAUDE.md's ITERATING responsibilities."
+    )
+    return 0
+
+
+def extract_plan_content() -> str:
+    """Pull plan content from the hook's stdin JSON, falling back to the
+    most recently modified file under ~/.claude/plans/."""
+    try:
+        hook_input = json.load(sys.stdin)
+    except (ValueError, AttributeError):
+        hook_input = {}
+
+    plan = (
+        (hook_input.get("tool_input") or {}).get("plan")
+        or (hook_input.get("tool_response") or {}).get("plan")
+        or (hook_input.get("tool_input") or {}).get("message")
+        or ""
+    )
+    if plan:
+        return plan
+
+    plans_dir = Path.home() / ".claude" / "plans"
+    if plans_dir.is_dir():
+        plans = sorted(
+            plans_dir.glob("*.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if plans:
+            return plans[0].read_text()
+
+    return ""
+
+
+def upsert_plan_section(content: str, plan: str) -> str:
+    """Insert (or replace) a top-level `** Plan` section in the org file.
+
+    Body lines are indented with three spaces per the surrounding
+    template convention. The plan markdown is dropped in essentially
+    verbatim — headings/lists from the plan render acceptably in
+    org-mode without conversion.
+    """
+    plan_lines = plan.rstrip().splitlines() or ["(plan content was empty)"]
+    indented = "\n".join(("   " + ln) if ln else "" for ln in plan_lines)
+    plan_block = "** Plan\n" + indented + "\n\n"
+
+    # If a Plan section already exists, replace it (up to the next ** or
+    # Local Variables footer).
+    if re.search(r"^\*\* Plan\b", content, re.M):
+        return re.sub(
+            r"^\*\* Plan\b.*?(?=^\*\* |^# Local Variables:|\Z)",
+            plan_block,
+            content,
+            count=1,
+            flags=re.M | re.S,
+        )
+
+    # Otherwise insert before the most natural anchor we can find.
+    for marker in (
+        r"^\*\* Acceptance criteria\b",
+        r"^\*\* Notes\b",
+        r"^# Local Variables:",
+    ):
+        m = re.search(marker, content, re.M)
+        if m:
+            return content[: m.start()] + plan_block + content[m.start():]
+
+    # No anchor found; append at end.
+    return content.rstrip() + "\n\n" + plan_block
+
+
+def flip_planning_to_iterating(content: str) -> str:
+    """Replace `* PLANNING <text> [:tag:]` with `* ITERATING <text> :agent:`.
+
+    Strips any existing trailing tag chain to avoid accreting tags
+    across re-invocations.
+    """
+    return re.sub(
+        r"^(\*\s+)PLANNING\s+(.*?)\s*(?::[A-Za-z0-9_:]+:)?\s*(\r?\n)",
+        lambda m: f"{m.group(1)}ITERATING {m.group(2)} :agent:{m.group(3)}",
+        content,
+        count=1,
+        flags=re.M,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

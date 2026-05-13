@@ -130,4 +130,4 @@ exec docker run --rm -it --privileged \
     -e "CLOUDE_ROOT=$CLOUDE" \
     -w "$WORKTREE" \
     cloude \
-    claude --dangerously-skip-permissions
+    claude --dangerously-skip-permissions --settings /etc/cloude/settings.json

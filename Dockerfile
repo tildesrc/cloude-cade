@@ -68,5 +68,11 @@ RUN { \
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Cloude-managed Claude Code settings, baked into the image. Surfaced
+# to the in-container claude via `claude --settings /etc/cloude/settings.json`
+# (added by bin/cloude-run). Layers on top of the user-scoped settings
+# in the persist volume — doesn't replace them.
+COPY docker/cloude-settings.json /etc/cloude/settings.json
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["claude", "--dangerously-skip-permissions"]
