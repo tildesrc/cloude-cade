@@ -141,6 +141,8 @@ Edit the new file. The properties drawer is the same in both modes; the heading 
 
 In ADOPT mode, also add a `:ADOPTED:` property set to `t` (or any truthy value) so it's easy to grep for adopted tasks later, and add a brief Notes line: `Adopted from PR <pr-url> — original heading: ADOPT <pr-url>`.
 
+**Companion-task detection (both modes)** — if the staging heading text references another PR (e.g., `acme-webapp changes for https://github.com/.../pull/124` or `Frontend for PR #123`), add a `:COMPANION_PR:` property to the drawer with the referenced PR's full URL. Don't try to parse fancy patterns; if the heading clearly names a sibling PR that this task is paired with, capture it. Note the companion link in the `Notes` section too. See `README.md` for the property's documented meaning.
+
 If the staging entry had body content, move it into the `Notes` section. Leave `Goal`, `Context`, and `Acceptance criteria` for the user to fill in.
 
 ## 8. Remove the entry from tasks/staging.org

@@ -111,19 +111,23 @@ open a branch in. Ideas live as sub-headings under their project:
 Each active task file's top-level heading carries a properties drawer
 with the metadata needed to act on the task without hunting:
 
-| Property    | Meaning                                                        |
-| ----------- | -------------------------------------------------------------- |
-| `:ID:`      | Stable task identifier, matches the filename (`YYYY-MM-DD-<slug>`). |
-| `:REPO:`    | GitHub repo the task lives in. Carried from the staging project. |
-| `:BRANCH:`  | Feature branch name in the repo.                                |
-| `:WORKTREE:`| Local git worktree path where the agent works.                  |
-| `:PR:`      | Pull request URL once the draft PR exists.                      |
-| `:AGENT:`   | Link to the agent session driving the task.                     |
+| Property         | Meaning                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| `:ID:`           | Stable task identifier, matches the filename (`YYYY-MM-DD-<slug>`). |
+| `:REPO:`         | GitHub repo the task lives in. Carried from the staging project. |
+| `:BRANCH:`       | Feature branch name in the repo.                                |
+| `:WORKTREE:`     | Local git worktree path where the agent works.                  |
+| `:PR:`           | Pull request URL once the draft PR exists.                      |
+| `:AGENT:`        | Link to the agent session driving the task.                     |
+| `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
+| `:COMPANION_PR:` | *(optional)* URL of a related PR this task pairs with — e.g., an acme-webapp companion to an acme-service PR. Used when work spans two PRs that should land together. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
 the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
-whenever an agent is attached).
+whenever an agent is attached). `:ADOPTED:` and `:COMPANION_PR:` are
+set by `/promote` when the situation applies; they're omitted on
+ordinary tasks.
 
 ### Lifecycle
 
