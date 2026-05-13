@@ -55,16 +55,17 @@ Parse the output to know the final state of each check. `gh pr checks --watch` p
 
 Two branches:
 
-### 4a. All checks passing → clean exit
+### 4a. All checks passing → flip to :user: and exit
 
-If no failing checks (and at least one passing), the iteration is done:
+If no failing checks (and at least one passing), the agent's autonomous work is done. The next move — actually advancing the stage — is the user's call.
 
+- Edit `$CLOUDE_TASK_FILE`'s top-level heading: replace any trailing `:tag:` markers (`:agent:` typically; could be a chain) with `:user:`. Preserve the TODO keyword (still `ITERATING`, or whatever stage you were running under) and the heading text exactly. This signals that nothing more is happening autonomously and the user should look at the result and decide whether to `/advance`.
 - Delete `<worktree>/.cloude-babysit-state.json`.
 - Print:
   ```
-  babysit-ci: CI is green on <pr-url>. ITERATING DoD's CI item is satisfied. Run /advance when ready.
+  babysit-ci: CI is green on <pr-url>. Heading tag flipped to :user:. Run /advance when ready.
   ```
-- End the turn. Loop terminates here.
+- End the turn. Loop terminates here. **Do not auto-advance the TODO state.** Advancing forward is user-driven by design; the `:user:` flip is the explicit hand-off.
 
 ### 4b. At least one failing → fix and re-watch
 

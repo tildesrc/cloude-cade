@@ -320,10 +320,12 @@ commands:
   autonomously after a push. Push-driven: kicks off `gh pr checks
   --watch` as a background bash; the harness fires a new turn when
   the watch returns. On that turn, the agent reads the result —
-  green stops the loop, failures get diagnosed, fixed (commit +
-  push), and watched again. Budgets: 2h wall-clock, 3 post-fix
-  retries per failing check. On bail, flips the heading tag to
-  `:user:` so the user knows attention is needed. Zero token cost
+  **green flips the heading tag to `:user:` and stops** (does not
+  auto-advance the TODO state — advancing forward is user-driven),
+  failures get diagnosed, fixed (commit + push), and watched again.
+  Budgets: 2h wall-clock, 3 post-fix retries per failing check. On
+  bail, flips the heading tag to `:user:` so the user knows
+  attention is needed. Zero token cost
   during the watch — Claude is fully idle until CI ends.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
