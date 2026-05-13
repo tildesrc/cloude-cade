@@ -59,15 +59,19 @@ Show the proposed slug to the user and ask them to confirm or override.
 From the project's `:REPO:` URL (same logic in both modes):
 
 - Extract the **owner** and **repo name** (handle both forms — `git@github.com:OWNER/REPO[.git]` and `https://github.com/OWNER/REPO[.git]`).
-- Compute the **HTTPS clone URL**: `https://github.com/<owner>/<repo>.git`. We always clone via HTTPS so the in-container `git push` (which has no SSH keys, only a forwarded `GH_TOKEN`) works.
-- The source clone lives at `<cloude-root>/repos/<repo-name>`. If it doesn't exist yet, clone it and configure the gh credential helper for this repo:
+- Compute the **HTTPS clone URL**: `https://github.com/<owner>/<repo>.git`. We want the remote in HTTPS form so the in-container `git push` (which has no SSH keys, only a forwarded `GH_TOKEN`) works.
+- The source clone lives at `<cloude-root>/repos/<repo-name>`. If it doesn't exist yet, clone it via `gh repo clone` (which uses gh's auth, so private repos work even when the host has no git credential helper configured globally), normalize the remote to HTTPS, and configure the gh credential helper for this repo:
   ```
   mkdir -p <cloude-root>/repos
-  git clone <https-clone-url> <cloude-root>/repos/<repo-name>
+  gh repo clone <owner>/<repo> <cloude-root>/repos/<repo-name>
+  git -C <cloude-root>/repos/<repo-name> remote set-url origin <https-clone-url>
   git -C <cloude-root>/repos/<repo-name> \
       config credential."https://github.com".helper '!gh auth git-credential'
   ```
-  The per-repo credential helper makes all subsequent `git fetch`/`push` against this clone auth through `gh` on the host (and the container's `/etc/gitconfig` configures the same helper for inside the container).
+  Why each step:
+  - `gh repo clone` instead of `git clone` — `gh` always carries the user's PAT, so private repos clone without the host needing a global git credential helper. Plain `git clone` of a private repo fails with "could not read Username".
+  - `remote set-url origin <https-clone-url>` — `gh repo clone` honors gh's configured `git_protocol` (which can be ssh). We want HTTPS regardless, so the in-container container can push using the forwarded `GH_TOKEN` rather than SSH keys it doesn't have.
+  - The per-repo credential helper makes all subsequent `git fetch`/`push` against this clone auth through `gh` on the host (and the container's `/etc/gitconfig` configures the same helper for inside the container).
 - **Standard mode only**: detect the default branch:
   ```
   gh repo view <owner>/<repo> --json defaultBranchRef -q .defaultBranchRef.name
