@@ -32,6 +32,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# uv (Astral's Python package/project manager). Common dev dependency
+# for projects that use `uvx ...` or `uv run ...` (e.g. plugin hooks).
+# Pinned to /usr/local/bin so it's on PATH for every user.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
+
 # UID/GID match the invoking host user. Defaults are sane for most Linux
 # users; bin/cloude-run and the Makefile pass the actual host values.
 ARG HOST_UID=1000
