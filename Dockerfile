@@ -38,6 +38,14 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
 
+# bun (JS/TS runtime + package manager). Installer needs unzip and
+# drops the binary at $BUN_INSTALL/bin/bun; pin to /usr/local so it's
+# on PATH for every user.
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://bun.sh/install \
+       | env BUN_INSTALL=/usr/local bash
+
 # UID/GID match the invoking host user. Defaults are sane for most Linux
 # users; bin/cloude-run and the Makefile pass the actual host values.
 ARG HOST_UID=1000
