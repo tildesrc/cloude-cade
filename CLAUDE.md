@@ -208,9 +208,22 @@ in mind:
 - The container has Docker-in-Docker, so `docker compose` works for
   spinning up the project's dev environment. The agent runs as an
   unprivileged user; only `dockerd` is privileged.
-- The worktree is the cwd and writable. The task's `.org` file is
-  writable. The rest of the cloude repo (other tasks, README, etc.) is
-  read-only — treat the worktree as your sandbox.
+- **`$CLOUDE_TASK_FILE` is writable. Edit it directly.** Yes, the
+  cloude repo as a whole is mounted read-only — *but `bin/cloude-run`
+  layers a writable bind mount on top of that single task file*, so
+  `$CLOUDE_TASK_FILE` is the one place inside `$CLOUDE_ROOT/`
+  you can write to. Use it: write your `** Plan` content into the
+  task file during PLANNING; flip the heading's TODO keyword and tag
+  via `/advance`, `/iterate`, `/drop`; append session notes into
+  `** Notes`. **Do not** assume "cloude is ro" and write your plan
+  into a commit message as a workaround — write the plan into the
+  task file's `** Plan` section, which is exactly what PLANNING's DoD
+  ("the plan is written into the task's org file") requires. If you
+  see a permission error on `$CLOUDE_TASK_FILE`, that's a real
+  problem worth reporting — don't paper over it.
+- The worktree is the cwd and writable. The rest of the cloude repo
+  (other tasks, README, scripts) is read-only — treat the worktree as
+  your sandbox.
 - git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
   mounted read-only). Use them as you would on the host.
 
