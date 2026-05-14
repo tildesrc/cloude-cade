@@ -115,13 +115,24 @@ if [[ -n "${GH_TOKEN:-}" ]]; then
     GH_TOKEN_ENV=(-e "GH_TOKEN=$GH_TOKEN")
 fi
 
+# tasks/active/ is mounted rw at the DIRECTORY level (not the specific
+# file). Reason: Docker single-file bind mounts pin to the source
+# inode, so any host-side edit that writes via atomic-rename (e.g.,
+# the Claude Code Edit tool does write-to-tmp then `rename()`) replaces
+# the inode and silently breaks the bind. With a dir-level mount, the
+# dir's inode stays stable across child-file renames, so host edits
+# continue to be visible inside and the task file stays writable.
+# Trade-off: the agent has rw on ALL active tasks. The "edit only your
+# own task file" rule becomes a soft (CLAUDE.md-enforced) rule rather
+# than a physical (mount-enforced) one. $CLOUDE_TASK_FILE tells the
+# agent which one is theirs.
 exec docker run --rm -it --privileged \
     -v cloude-claude-creds:/persist \
     -v "$DIND_VOLUME":/var/lib/docker \
     -v "$CLOUDE":"$CLOUDE":ro \
     -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
     -v "$WORKTREE":"$WORKTREE":rw \
-    -v "$TASK_FILE":"$TASK_FILE":rw \
+    -v "$CLOUDE/tasks/active":"$CLOUDE/tasks/active":rw \
     -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
     "${DOCKER_CFG_MOUNT[@]}" \

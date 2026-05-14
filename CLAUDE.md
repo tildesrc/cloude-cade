@@ -210,20 +210,26 @@ in mind:
   unprivileged user; only `dockerd` is privileged.
 - **`$CLOUDE_TASK_FILE` is writable. Edit it directly.** Yes, the
   cloude repo as a whole is mounted read-only — *but `bin/cloude-run`
-  layers a writable bind mount on top of that single task file*, so
-  `$CLOUDE_TASK_FILE` is the one place inside `$CLOUDE_ROOT/`
-  you can write to. Use it: write your `** Plan` content into the
-  task file during PLANNING; flip the heading's TODO keyword and tag
-  via `/advance`, `/iterate`, `/drop`; append session notes into
+  layers a writable bind mount on top of `tasks/active/` (the whole
+  directory)*, so any file under `tasks/active/` is writable from
+  inside. Use it: write your `** Plan` content into the task file
+  during PLANNING; flip the heading's TODO keyword and tag via
+  `/advance`, `/iterate`, `/drop`; append session notes into
   `** Notes`. **Do not** assume "cloude is ro" and write your plan
   into a commit message as a workaround — write the plan into the
-  task file's `** Plan` section, which is exactly what PLANNING's DoD
-  ("the plan is written into the task's org file") requires. If you
-  see a permission error on `$CLOUDE_TASK_FILE`, that's a real
-  problem worth reporting — don't paper over it.
+  task file's `** Plan` section, which is exactly what PLANNING's
+  DoD ("the plan is written into the task's org file") requires.
+- **Soft rule: only edit your own task file.** The rw mount covers
+  the whole `tasks/active/` directory (because Docker single-file
+  bind mounts break when the host writes via atomic-rename — a
+  directory-level mount is the inode-stable alternative). You can
+  technically read and write the other in-flight tasks' files, but
+  **don't**. Concurrent agents rely on each one updating only its
+  own file to avoid conflicts. `$CLOUDE_TASK_FILE` is yours; treat
+  the rest of `tasks/active/` as read-only by convention.
 - The worktree is the cwd and writable. The rest of the cloude repo
-  (other tasks, README, scripts) is read-only — treat the worktree as
-  your sandbox.
+  (staging.org, completed/, dropped/, README, scripts) is
+  read-only — treat the worktree as your sandbox.
 - git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
   mounted read-only). Use them as you would on the host.
 
