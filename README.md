@@ -92,7 +92,7 @@ session.
 
 ### staging.org structure
 
-Top-level headings in `tasks/staging.org` are **projects**. Each project
+Top-level headings in `tasks/staging.org` are **projects**. A project
 carries a `:REPO:` property pointing to its GitHub repo, so when a
 task is promoted from staging to active the agent knows which repo to
 open a branch in. Ideas live as sub-headings under their project:
@@ -105,6 +105,20 @@ open a branch in. Ideas live as sub-headings under their project:
 ** Add a task-promotion script
 ** Hook to auto-move COMPLETE files
 ```
+
+A top-level heading **without** `:REPO:` is treated as a **TODO
+project** — its sub-headings are personal TODOs the user works on
+themselves, not promotable agent-driven tasks. They appear in the
+dashboard's `TODO` section and are skipped by `/promote`:
+
+```org
+* Non-cloude
+** Get recall precision curve for recent predictions in live nation
+** Reply to the design doc thread
+```
+
+You can delete TODOs when finished — there's no separate
+"completed" pile for them.
 
 ### Active task properties
 
@@ -150,14 +164,19 @@ ordinary tasks.
 
 `bin/cloude-dash` is a curses TUI that surfaces the state of every task
 in one screen. It parses each `tasks/**/*.org` file with `orgparse` and
-renders three sections:
+renders four sections:
 
 - **ACTIVE** — one row per file in `tasks/active/`, sorted by stage
   priority (`MERGING` first, then `REVIEW`, `ITERATING`, `PLANNING`).
   Each row shows the TODO keyword, who currently has the ball
   (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading, and
   the PR number from the `:PR:` property.
-- **STAGING** — every idea sub-heading from `tasks/staging.org`.
+- **STAGING** — idea sub-headings under top-level projects that have a
+  `:REPO:` property (i.e. promotable via `/promote`).
+- **TODO** — idea sub-headings under top-level projects that have no
+  `:REPO:` (personal TODOs the user works on without an agent).
+  Prefixed with the project name in brackets, e.g. `[Non-cloude] …`.
+  Not promotable.
 - **RECENT** — the 20 most-recently-touched files from
   `tasks/completed/` and `tasks/dropped/`.
 

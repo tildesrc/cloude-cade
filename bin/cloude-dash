@@ -48,6 +48,7 @@ TASKS = CLOUDE_ROOT / "tasks"
 
 ACTIVE = "ACTIVE"
 STAGING = "STAGING"
+TODO = "TODO"
 RECENT = "RECENT"
 
 STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
@@ -95,28 +96,45 @@ def _load_single_task_file(path: Path, section: str) -> Task | None:
     )
 
 
-def _load_staging(path: Path) -> list[Task]:
+def _load_staging(path: Path) -> tuple[list[Task], list[Task]]:
+    """Split staging children into (staging, todo).
+
+    A top-level project heading with a `:REPO:` property holds
+    promotable ideas (STAGING). One without `:REPO:` holds personal
+    TODOs that `/promote` skips and the dashboard renders separately.
+    """
     if not path.exists():
-        return []
+        return [], []
     try:
         root = orgparse.load(str(path))
     except Exception:
-        return []
-    out: list[Task] = []
+        return [], []
+    staging: list[Task] = []
+    todo: list[Task] = []
+    mtime = path.stat().st_mtime
     for project in root.children:
+        props = dict(project.properties) if project.properties else {}
+        is_promotable = bool(props.get("REPO"))
+        bucket = staging if is_promotable else todo
+        section = STAGING if is_promotable else TODO
+        project_name = str(project.heading).strip()
         for idea in project.children:
-            out.append(
+            idea_title = str(idea.heading).strip()
+            # TODO rows carry the parent project name as a prefix so
+            # the dashboard shows grouping without a sub-header.
+            title = idea_title if is_promotable else f"[{project_name}] {idea_title}"
+            bucket.append(
                 Task(
-                    section=STAGING,
+                    section=section,
                     state="",
                     tag=_ball_tag(idea.tags),
-                    title=str(idea.heading).strip(),
+                    title=title,
                     pr_url=None,
                     path=path,
-                    mtime=path.stat().st_mtime,
+                    mtime=mtime,
                 )
             )
-    return out
+    return staging, todo
 
 
 def load_tasks() -> dict[str, list[Task]]:
@@ -127,7 +145,7 @@ def load_tasks() -> dict[str, list[Task]]:
             active.append(t)
     active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
 
-    staging = _load_staging(TASKS / "staging.org")
+    staging, todo = _load_staging(TASKS / "staging.org")
 
     recent: list[Task] = []
     for sub, label in (("completed", "COMPLETE"), ("dropped", "DROPPED")):
@@ -143,7 +161,7 @@ def load_tasks() -> dict[str, list[Task]]:
     recent.sort(key=lambda t: t.mtime, reverse=True)
     recent = recent[:RECENT_LIMIT]
 
-    return {ACTIVE: active, STAGING: staging, RECENT: recent}
+    return {ACTIVE: active, STAGING: staging, TODO: todo, RECENT: recent}
 
 
 # --- rendering -------------------------------------------------------------
@@ -156,11 +174,12 @@ ROW_EMPTY = "empty"
 
 def _flatten(groups: dict[str, list[Task]]) -> list[tuple[str, object]]:
     rows: list[tuple[str, object]] = []
-    for section in (ACTIVE, STAGING, RECENT):
+    for section in (ACTIVE, STAGING, TODO, RECENT):
         items = groups[section]
         label = {
             ACTIVE: f"ACTIVE ({len(items)})",
             STAGING: f"STAGING ({len(items)})",
+            TODO: f"TODO ({len(items)})",
             RECENT: f"RECENT ({len(items)})",
         }[section]
         rows.append((ROW_HEADER, label))

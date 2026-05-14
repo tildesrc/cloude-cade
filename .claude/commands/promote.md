@@ -19,10 +19,12 @@ Each numbered step below calls out when ADOPT behaves differently.
 
 Read `tasks/staging.org`. Parse it:
 
-- Top-level headings (`*`) are projects. Each carries a `:REPO:` property pointing to a GitHub repo.
-- Sub-headings (`**`) under a project are ideas.
+- Top-level headings (`*`) are projects. **Filter to projects that have a `:REPO:` property** — those are the promotable ones. A top-level heading without `:REPO:` is a "TODO project" whose sub-headings are personal TODOs the user works on without an agent (see `bin/cloude-dash`'s TODO section). `/promote` skips those entirely.
+- Sub-headings (`**`) under each promotable project are ideas.
 
-Present the ideas grouped by project, numbered globally so the user can pick by number. Ask the user which one to promote.
+Present the ideas grouped by project, numbered globally so the user can pick by number. If you found any TODO projects (no `:REPO:`), mention that as one short line above the listing — e.g. `(TODO-project ideas under "Non-cloude" omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask the user which one to promote.
+
+If the user names a TODO-project idea by some out-of-band shortcut, refuse with: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 
 ## 2. Detect mode and (if ADOPT) gather PR details
 
