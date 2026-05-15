@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Stop hook handler — nudge the agent off `:agent:` at end of turn.
+
+Fires at the end of every agent turn. If the in-container task is in
+an in-flight stage (PLANNING / ITERATING / REVIEW / MERGING) with the
+heading tag `:agent:`, blocks the stop ONCE and injects a reminder
+listing that stage's Definition of Done plus the available
+tag-flipping outcomes.
+
+The single-block-per-stop guarantee comes from honoring the harness's
+`stop_hook_active` flag: when set, this hook silently allows the stop,
+so the model cannot get stuck in a block loop.
+
+Why this exists: `bin/cloude-dash` color-codes every active task by
+`:agent:` / `:user:` / `:blocked:`. A stuck `:agent:` silently lies to
+the dashboard and hides a task that actually needs user attention.
+
+Only fires when:
+  - stop_hook_active is false
+  - $CLOUDE_TASK_FILE is set and points to an existing file
+  - the heading's current TODO keyword is PLANNING / ITERATING /
+    REVIEW / MERGING (terminal states get no nudge)
+  - the heading's tag chain includes `agent`
+Other cases are silent no-ops.
+
+Registered via /etc/cloude/settings.json, which bin/cloude-run wires
+in by passing `--settings /etc/cloude/settings.json` to claude.
+
+The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
+("Stage details"). If you edit one, edit the other.
+"""
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+DOD = {
+    "PLANNING": [
+        "The plan is written into the task's org file.",
+        "The user has approved the plan.",
+        "A draft PR has been created on GitHub.",
+    ],
+    "ITERATING": [
+        "The plan is implemented in code.",
+        "All user requests are implemented in code.",
+        "New and relevant tests pass locally.",
+        "Changes are committed and pushed.",
+        "CI tests are passing, or any failures can be attributed to irrelevant flakes.",
+    ],
+    "REVIEW": [
+        "The PR has been reviewed.",
+    ],
+    "MERGING": [
+        "The PR is merged.",
+    ],
+}
+
+
+def main() -> int:
+    try:
+        hook_input = json.load(sys.stdin)
+    except (ValueError, AttributeError):
+        hook_input = {}
+
+    if hook_input.get("stop_hook_active"):
+        return 0
+
+    task = os.environ.get("CLOUDE_TASK_FILE")
+    if not task or not Path(task).is_file():
+        return 0
+
+    parsed = parse_heading(Path(task).read_text())
+    if parsed is None:
+        return 0
+
+    state, tags = parsed
+    if state not in DOD or "agent" not in tags:
+        return 0
+
+    print(json.dumps({"decision": "block", "reason": build_reason(state)}))
+    return 0
+
+
+def parse_heading(content: str) -> tuple[str, list[str]] | None:
+    """Find the first top-level heading; return (TODO keyword, [tag names]).
+
+    Tag names are split from a trailing org-tag chain (`:foo:bar:`). The
+    non-greedy `(.*?)` for the heading text ensures embedded colon-words
+    in the title (e.g. ":user:" appearing mid-title) are not mistaken
+    for the tag chain — only the trailing chain matches `\\s*$`.
+    """
+    m = re.search(
+        r"^\*\s+(\S+)\s+(.*?)\s*(?::([A-Za-z0-9_@:]+):)?\s*$",
+        content,
+        re.M,
+    )
+    if not m:
+        return None
+    tag_chain = m.group(3) or ""
+    return m.group(1), [t for t in tag_chain.split(":") if t]
+
+
+def build_reason(state: str) -> str:
+    bullets = "\n".join(f"  - {b}" for b in DOD[state])
+
+    if state == "MERGING":
+        forward_action = (
+            "  - If the DoD is met (PR is merged): run `/advance` to move\n"
+            "    to `COMPLETE :user:`. MERGING → COMPLETE is the one\n"
+            "    agent-driven forward transition.\n"
+        )
+    else:
+        forward_action = (
+            f"  - If the DoD is met: flip the heading tag from `:agent:`\n"
+            f"    to `:user:` by editing `$CLOUDE_TASK_FILE` directly.\n"
+            f"    Forward transitions out of {state} are user-driven, so\n"
+            f"    do NOT `/advance` yourself — just hand the ball back.\n"
+        )
+
+    return (
+        f"You're about to stop with the task heading still tagged `:agent:`\n"
+        f"in `{state}`. That misleads `bin/cloude-dash`, which uses the\n"
+        f"tag to show the user who has the ball — a stuck `:agent:` hides\n"
+        f"a task that may actually be waiting on them.\n"
+        f"\n"
+        f"Before you stop, walk through `{state}`'s Definition of Done:\n"
+        f"{bullets}\n"
+        f"\n"
+        f"Then pick the outcome that matches reality:\n"
+        f"{forward_action}"
+        f"  - If you're pausing for user input or a judgment call (DoD\n"
+        f"    not met, but you need the user): flip `:agent:` → `:user:`.\n"
+        f"  - If you're waiting on something external (peer review,\n"
+        f"    long-running CI): flip `:agent:` → `:blocked:`.\n"
+        f"  - If you're actually still actively working: keep `:agent:`\n"
+        f"    and continue. This block fires only once per stop cycle,\n"
+        f"    so a deliberate re-stop will go through unblocked.\n"
+        f"\n"
+        f"Edit the heading directly in `$CLOUDE_TASK_FILE` to retag. From\n"
+        f"`ITERATING` you can also use `/iterate --tag user` or\n"
+        f"`/iterate --tag blocked` as a shortcut."
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

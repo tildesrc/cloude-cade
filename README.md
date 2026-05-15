@@ -281,6 +281,35 @@ hide the change from `git status` via `git update-index
 `index` and `info/exclude`, so these changes are isolated to the one
 worktree.
 
+### In-container hooks
+
+`docker/cloude-settings.json` registers Claude Code hooks that fire
+inside the container, keeping the task heading's TODO keyword and
+who-has-the-ball tag in sync with what the agent is actually doing:
+
+- **`PostToolUse:ExitPlanMode` → `bin/cloude-on-plan-accepted`.** When
+  the user accepts a plan in plan mode and the task is in `PLANNING`,
+  writes the accepted plan into the task file's `** Plan` section and
+  flips the heading to `ITERATING :agent:`. Lets the agent start
+  implementing on its next turn without a separate `/advance` step.
+- **`Stop` → `bin/cloude-on-stop`.** Fires at the end of every agent
+  turn. If the task is in an in-flight stage (PLANNING / ITERATING /
+  REVIEW / MERGING) with tag `:agent:`, blocks the stop once and
+  reminds the agent of that stage's Definition of Done plus the
+  available tag-flipping outcomes (`:user:` / `:blocked:` / keep
+  `:agent:` and continue). Honors `stop_hook_active` to block only
+  once per stop cycle. Keeps the `bin/cloude-dash` dashboard honest
+  about which tasks are actually still being worked vs. waiting on
+  the user.
+
+The settings file is baked into the image (Dockerfile `COPY
+docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced
+to the in-container `claude` via `--settings
+/etc/cloude/settings.json` (added by `bin/cloude-run`). The hook
+scripts themselves live in `bin/` and are read via the read-only
+bind mount of the cloude repo, so editing them needs no image
+rebuild — only changes to `cloude-settings.json` do.
+
 ### Make targets
 
 - `make build` / `make rebuild` — build (cached) / rebuild (no cache).
