@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# Mechanical cleanup chain for /finalize.
+#
+# Given an active task file whose TODO is COMPLETE or DROPPED,
+# this performs the side-effect steps the agent shouldn't have to
+# narrate one tool call at a time:
+#
+#   1. Source cloude-task-info to load metadata.
+#   2. Decide action from $TODO and verify/close the PR.
+#   3. Kill the tmux session.
+#   4. Remove the git worktree.
+#   5. Remove the DinD volume (cloude-dind-<slug>).
+#   6. (COMPLETE only) delete the local branch.
+#   7. Move the task file into tasks/{completed,dropped}/.
+#   8. Print a summary block on stdout.
+#
+# Judgment-call cases bail with distinct exit codes so the calling
+# skill can prompt the user and rerun with the matching override:
+#
+#   10 — TODO=COMPLETE but the PR is not in state MERGED.
+#   11 — TODO is neither COMPLETE nor DROPPED. Pass --force-drop to
+#        flip the keyword to DROPPED and proceed.
+#   12 — Worktree removal failed (dirty / locked). Pass
+#        --force-worktree to retry with git's --force.
+#   13 — DinD volume removal failed because something is using it.
+#        Pass --skip-volume to leave it in place.
+#
+# Anything else is a hard failure: 20 (gh pr close), 21 (file move),
+# 22 (task-info), 30 (arg validation).
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <task-file> [options]
+
+Options:
+  --force-drop       Treat non-terminal TODO as DROPPED; flip the
+                     heading's keyword in place and proceed.
+  --force-worktree   Pass --force to 'git worktree remove'.
+  --skip-volume      Skip DinD volume removal.
+
+Exit codes:
+   0  success
+  10  PR not MERGED (COMPLETE-mode only)
+  11  TODO not COMPLETE/DROPPED, --force-drop not given
+  12  worktree dirty / locked, --force-worktree not given
+  13  DinD volume in use, --skip-volume not given
+  20+ other failure (stderr names the step)
+  30  argument validation
+EOF
+}
+
+if [[ $# -lt 1 ]]; then
+    usage >&2
+    exit 30
+fi
+
+TASK_FILE=""
+FORCE_DROP=false
+FORCE_WORKTREE=false
+SKIP_VOLUME=false
+
+while (($#)); do
+    case "$1" in
+        --force-drop)     FORCE_DROP=true ;;
+        --force-worktree) FORCE_WORKTREE=true ;;
+        --skip-volume)    SKIP_VOLUME=true ;;
+        -h|--help)        usage; exit 0 ;;
+        --)               shift; TASK_FILE="$1" ;;
+        -*)               echo "ERROR: unknown flag: $1" >&2; usage >&2; exit 30 ;;
+        *)
+            if [[ -n "$TASK_FILE" ]]; then
+                echo "ERROR: extra positional arg: $1" >&2
+                exit 30
+            fi
+            TASK_FILE="$1"
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$TASK_FILE" || ! -f "$TASK_FILE" ]]; then
+    echo "ERROR: task file not found: $TASK_FILE" >&2
+    exit 30
+fi
+TASK_FILE="$(cd "$(dirname "$TASK_FILE")" && pwd)/$(basename "$TASK_FILE")"
+
+# Resolve cloude-task-info from this script's directory (alongside us).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TASK_INFO="$SCRIPT_DIR/cloude-task-info"
+if [[ ! -x "$TASK_INFO" ]]; then
+    echo "ERROR: cloude-task-info not found alongside this script: $TASK_INFO" >&2
+    exit 22
+fi
+
+# Load metadata. cloude-task-info emits shlex-quoted KEY=VALUE lines.
+info_out="$("$TASK_INFO" "$TASK_FILE")" || {
+    echo "ERROR: cloude-task-info failed (exit $?). See its stderr above." >&2
+    exit 22
+}
+eval "$info_out"
+
+# $TODO $TAG $HEADING $WORKTREE $BRANCH $PR $REPO $ID
+# $ADOPTED $COMPANION_PR
+# $SLUG $REPO_NAME $SOURCE_CLONE $TMUX_SESSION $DIND_VOLUME $CLOUDE_ROOT
+
+# --- Step 2: decide action from $TODO --------------------------------------
+
+FORCED_DROP=false
+case "$TODO" in
+    COMPLETE)
+        # Verify PR is actually MERGED before going further.
+        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
+        if [[ "$pr_state" != "MERGED" ]]; then
+            echo "ERROR: task is COMPLETE but PR is in state: ${pr_state:-<unknown>}" >&2
+            echo "       fix: set the TODO back to MERGING in $TASK_FILE and re-run" >&2
+            echo "       once the merge actually lands." >&2
+            exit 10
+        fi
+        ;;
+    DROPPED)
+        # Close the PR if it isn't already closed/merged. gh pr close on
+        # an already-closed PR errors out, so check state first.
+        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
+        if [[ "$pr_state" == "OPEN" ]]; then
+            if ! gh pr close "$PR" --delete-branch=false >/dev/null; then
+                echo "ERROR: gh pr close failed for $PR" >&2
+                exit 20
+            fi
+        fi
+        ;;
+    *)
+        if ! $FORCE_DROP; then
+            echo "ERROR: task TODO is '$TODO', not COMPLETE or DROPPED." >&2
+            echo "       pass --force-drop to flip to DROPPED and proceed." >&2
+            exit 11
+        fi
+        # Flip the TODO keyword on the heading to DROPPED, in place.
+        # Use python (already a dependency via cloude-task-info) for
+        # a precise, atomic edit rather than sed.
+        python3 - "$TASK_FILE" "$TODO" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+old_todo = sys.argv[2]
+text = path.read_text()
+# The top-level heading line starts with "* <TODO> ". Replace only the
+# first occurrence of the old keyword right after the leading "* ".
+needle = f"* {old_todo} "
+i = text.find(needle)
+if i == -1:
+    sys.exit(f"could not locate '* {old_todo} ' in {path}")
+text = text[:i] + "* DROPPED " + text[i + len(needle):]
+path.write_text(text)
+PY
+        TODO=DROPPED
+        FORCED_DROP=true
+        # Close the PR for the drop, same logic as the DROPPED branch.
+        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
+        if [[ "$pr_state" == "OPEN" ]]; then
+            if ! gh pr close "$PR" --delete-branch=false >/dev/null; then
+                echo "ERROR: gh pr close failed for $PR" >&2
+                exit 20
+            fi
+        fi
+        ;;
+esac
+
+# --- Step 3: kill tmux session ---------------------------------------------
+
+TMUX_KILLED=false
+if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    TMUX_KILLED=true
+fi
+
+# --- Step 4: remove worktree -----------------------------------------------
+
+remove_worktree() {
+    local extra=()
+    if $FORCE_WORKTREE; then
+        extra+=(--force)
+    fi
+    git -C "$SOURCE_CLONE" worktree remove "${extra[@]}" "$WORKTREE"
+}
+
+if ! err="$(remove_worktree 2>&1)"; then
+    if $FORCE_WORKTREE; then
+        echo "ERROR: worktree removal failed even with --force-worktree:" >&2
+        echo "$err" >&2
+        exit 25
+    fi
+    echo "ERROR: worktree removal failed (dirty / locked / untracked files):" >&2
+    echo "$err" >&2
+    if [[ -d "$WORKTREE" ]]; then
+        echo "--- git status --short ---" >&2
+        git -C "$WORKTREE" status --short >&2 || true
+    fi
+    echo "       pass --force-worktree to discard and retry." >&2
+    exit 12
+fi
+
+# --- Step 5: remove DinD volume --------------------------------------------
+
+VOLUME_REMOVED="skipped"
+if ! $SKIP_VOLUME; then
+    if docker volume inspect "$DIND_VOLUME" >/dev/null 2>&1; then
+        if err="$(docker volume rm "$DIND_VOLUME" 2>&1)"; then
+            VOLUME_REMOVED="yes"
+        else
+            echo "ERROR: docker volume rm failed for $DIND_VOLUME:" >&2
+            echo "$err" >&2
+            echo "--- containers using this volume ---" >&2
+            docker ps -a --filter "volume=$DIND_VOLUME" >&2 || true
+            echo "       pass --skip-volume to leave it in place." >&2
+            exit 13
+        fi
+    else
+        VOLUME_REMOVED="absent"
+    fi
+fi
+
+# --- Step 6: delete local branch (COMPLETE only) ---------------------------
+
+BRANCH_RESULT="preserved (DROPPED)"
+if [[ "$TODO" == "COMPLETE" ]]; then
+    if git -C "$SOURCE_CLONE" branch -D "$BRANCH" >/dev/null 2>&1; then
+        BRANCH_RESULT="deleted"
+    else
+        BRANCH_RESULT="not present"
+    fi
+fi
+
+# --- Step 7: move the task file --------------------------------------------
+
+if [[ "$TODO" == "COMPLETE" ]]; then
+    DEST_DIR="$CLOUDE_ROOT/tasks/completed"
+else
+    DEST_DIR="$CLOUDE_ROOT/tasks/dropped"
+fi
+mkdir -p "$DEST_DIR"
+DEST="$DEST_DIR/$(basename "$TASK_FILE")"
+if ! mv "$TASK_FILE" "$DEST"; then
+    echo "ERROR: failed to move $TASK_FILE → $DEST" >&2
+    exit 21
+fi
+
+# --- Step 8: summary -------------------------------------------------------
+
+cat <<EOF
+Final state: $TODO$( $FORCED_DROP && echo " (force-dropped from previous state)" )
+Task file: moved → $DEST
+tmux session $TMUX_SESSION: $( $TMUX_KILLED && echo killed || echo "was not running" )
+Worktree $WORKTREE: removed$( $FORCE_WORKTREE && echo " (forced)" )
+DinD volume $DIND_VOLUME: $VOLUME_REMOVED
+Local branch $BRANCH: $BRANCH_RESULT
+PR $PR: $( [[ "$TODO" == "COMPLETE" ]] && echo "confirmed MERGED" || echo "closed" )
+EOF

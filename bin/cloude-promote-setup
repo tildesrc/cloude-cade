@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+# Mechanical setup chain for /promote.
+#
+# Given an idea already picked from tasks/staging.org and a confirmed
+# slug, this performs steps 4-9 of promote.md as one atomic chain:
+#
+#   1. Derive owner/repo-name/HTTPS-clone-url from --repo-url.
+#   2. Ensure the source clone exists at <cloude-root>/repos/<repo>
+#      with HTTPS origin + the gh credential helper.
+#   3. Create the worktree + feature branch:
+#        - standard: cloude/<slug> off origin/<default-branch>, push -u.
+#        - adopt:    track origin/<head-ref>, no push.
+#   4. (standard only) `gh pr create --draft`. Capture PR URL.
+#   5. Render the task file from tasks/TEMPLATE.org with the right
+#      properties / TODO keyword / tag for the mode.
+#   6. Remove the chosen sub-heading + body from tasks/staging.org.
+#   7. Create the detached tmux session that runs bin/cloude-run.
+#   8. Print a summary block on stdout.
+#
+# Exit codes:
+#   0   success
+#  10   source clone setup failed
+#  11   worktree creation failed
+#  12   gh pr create failed (standard only)
+#  13   task-file render failed
+#  14   staging entry not found / removal failed
+#  20   tmux session name already exists
+#  30   argument validation failed
+#
+# On any non-zero exit the stderr message names which steps succeeded
+# so the user knows what manual cleanup, if any, is needed.
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") --mode {standard|adopt} <args>
+
+Common required args:
+  --mode {standard|adopt}
+  --slug <slug>                  filesystem-safe slug
+  --repo-url <url>               https:// or git@ form, from staging :REPO:
+  --task-file <abs-path>         tasks/active/<YYYY-MM-DD>-<slug>.org
+  --staging-heading <text>       exact heading to delete from staging.org
+
+Standard-mode args:
+  --heading <text>               idea heading (becomes the task title)
+  --default-branch <branch>      base branch for the new PR
+
+ADOPT-mode args:
+  --head-ref <ref>               existing PR's branch
+  --base-ref <ref>               existing PR's base branch
+  --pr-url <url>
+  --pr-title <text>              becomes the task title
+  --pr-number <n>
+EOF
+}
+
+# --- arg parsing -----------------------------------------------------------
+
+MODE=""
+SLUG=""
+REPO_URL=""
+TASK_FILE=""
+STAGING_HEADING=""
+HEADING=""
+DEFAULT_BRANCH=""
+HEAD_REF=""
+BASE_REF=""
+PR_URL=""
+PR_TITLE=""
+PR_NUMBER=""
+
+if [[ $# -eq 0 ]]; then
+    usage >&2
+    exit 30
+fi
+
+while (($#)); do
+    case "$1" in
+        --mode)              MODE="$2"; shift 2 ;;
+        --slug)              SLUG="$2"; shift 2 ;;
+        --repo-url)          REPO_URL="$2"; shift 2 ;;
+        --task-file)         TASK_FILE="$2"; shift 2 ;;
+        --staging-heading)   STAGING_HEADING="$2"; shift 2 ;;
+        --heading)           HEADING="$2"; shift 2 ;;
+        --default-branch)    DEFAULT_BRANCH="$2"; shift 2 ;;
+        --head-ref)          HEAD_REF="$2"; shift 2 ;;
+        --base-ref)          BASE_REF="$2"; shift 2 ;;
+        --pr-url)            PR_URL="$2"; shift 2 ;;
+        --pr-title)          PR_TITLE="$2"; shift 2 ;;
+        --pr-number)         PR_NUMBER="$2"; shift 2 ;;
+        -h|--help)           usage; exit 0 ;;
+        *) echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 30 ;;
+    esac
+done
+
+require() {
+    local name="$1" val="$2"
+    if [[ -z "$val" ]]; then
+        echo "ERROR: missing required arg: $name" >&2
+        exit 30
+    fi
+}
+
+require --mode "$MODE"
+require --slug "$SLUG"
+require --repo-url "$REPO_URL"
+require --task-file "$TASK_FILE"
+require --staging-heading "$STAGING_HEADING"
+
+case "$MODE" in
+    standard)
+        require --heading "$HEADING"
+        require --default-branch "$DEFAULT_BRANCH"
+        ;;
+    adopt)
+        require --head-ref "$HEAD_REF"
+        require --base-ref "$BASE_REF"
+        require --pr-url "$PR_URL"
+        require --pr-title "$PR_TITLE"
+        ;;
+    *)
+        echo "ERROR: --mode must be 'standard' or 'adopt' (got: $MODE)" >&2
+        exit 30
+        ;;
+esac
+
+# --- Step 1: derive paths --------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLOUDE_ROOT="${CLOUDE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+# Parse --repo-url. Handles both:
+#   git@github.com:OWNER/REPO[.git]
+#   https://github.com/OWNER/REPO[.git]
+parse_repo_url() {
+    local url="$1"
+    local owner_repo
+    case "$url" in
+        git@github.com:*)         owner_repo="${url#git@github.com:}" ;;
+        https://github.com/*)     owner_repo="${url#https://github.com/}" ;;
+        *) echo "ERROR: unsupported --repo-url shape: $url" >&2; exit 30 ;;
+    esac
+    owner_repo="${owner_repo%.git}"
+    OWNER="${owner_repo%%/*}"
+    REPO_NAME="${owner_repo#*/}"
+    HTTPS_CLONE_URL="https://github.com/$OWNER/$REPO_NAME.git"
+}
+parse_repo_url "$REPO_URL"
+
+SOURCE_CLONE="$CLOUDE_ROOT/repos/$REPO_NAME"
+WORKTREE="$CLOUDE_ROOT/worktrees/$REPO_NAME/$SLUG"
+TMUX_SESSION="cloude-$SLUG"
+
+# Track what we managed to do so a mid-flow failure can describe state.
+DONE_STEPS=()
+record() { DONE_STEPS+=("$1"); }
+bail() {
+    local code="$1" msg="$2"
+    {
+        echo "ERROR: $msg"
+        echo "Succeeded so far:"
+        if ((${#DONE_STEPS[@]})); then
+            printf '  - %s\n' "${DONE_STEPS[@]}"
+        else
+            echo "  (nothing)"
+        fi
+    } >&2
+    exit "$code"
+}
+
+# --- Step 2: ensure source clone -------------------------------------------
+
+if [[ ! -d "$SOURCE_CLONE" ]]; then
+    mkdir -p "$CLOUDE_ROOT/repos"
+    if ! gh repo clone "$OWNER/$REPO_NAME" "$SOURCE_CLONE" >/dev/null 2>&1; then
+        bail 10 "gh repo clone $OWNER/$REPO_NAME failed"
+    fi
+    if ! git -C "$SOURCE_CLONE" remote set-url origin "$HTTPS_CLONE_URL"; then
+        bail 10 "git remote set-url origin <https> failed"
+    fi
+    if ! git -C "$SOURCE_CLONE" config \
+            credential."https://github.com".helper '!gh auth git-credential'; then
+        bail 10 "git config credential helper failed"
+    fi
+    record "Cloned $OWNER/$REPO_NAME → $SOURCE_CLONE"
+else
+    record "Source clone present at $SOURCE_CLONE"
+fi
+
+# --- Step 3: create worktree + branch --------------------------------------
+
+mkdir -p "$(dirname "$WORKTREE")"
+
+if [[ "$MODE" == "standard" ]]; then
+    BRANCH="cloude/$SLUG"
+    if ! git -C "$SOURCE_CLONE" fetch origin "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+        bail 11 "git fetch origin $DEFAULT_BRANCH failed"
+    fi
+    if ! git -C "$SOURCE_CLONE" worktree add -b "$BRANCH" "$WORKTREE" \
+            "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+        bail 11 "git worktree add $BRANCH failed"
+    fi
+    record "Worktree + branch '$BRANCH' off origin/$DEFAULT_BRANCH"
+    if ! git -C "$WORKTREE" push -u origin "$BRANCH" >/dev/null 2>&1; then
+        bail 11 "git push -u origin $BRANCH failed"
+    fi
+    record "Pushed $BRANCH to origin"
+else
+    BRANCH="$HEAD_REF"
+    if ! git -C "$SOURCE_CLONE" fetch origin \
+            "$HEAD_REF:refs/remotes/origin/$HEAD_REF" >/dev/null 2>&1; then
+        bail 11 "git fetch origin $HEAD_REF failed"
+    fi
+    # Use -B if the local branch already exists; otherwise -b.
+    local_branch_flag="-b"
+    if git -C "$SOURCE_CLONE" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        local_branch_flag="-B"
+    fi
+    if ! git -C "$SOURCE_CLONE" worktree add "$local_branch_flag" "$BRANCH" \
+            "$WORKTREE" "origin/$HEAD_REF" >/dev/null 2>&1; then
+        bail 11 "git worktree add $BRANCH failed"
+    fi
+    record "Worktree on $BRANCH tracking origin/$HEAD_REF"
+fi
+
+# --- Step 4: (standard) open draft PR --------------------------------------
+
+if [[ "$MODE" == "standard" ]]; then
+    task_id="$(basename "$TASK_FILE" .org)"
+    pr_body="Draft PR for task $task_id. Plan to follow."
+    if ! PR_URL="$(gh pr create --draft \
+            --base "$DEFAULT_BRANCH" --head "$BRANCH" \
+            --title "$HEADING" --body "$pr_body" \
+            -R "$OWNER/$REPO_NAME" 2>&1)"; then
+        bail 12 "gh pr create failed: $PR_URL"
+    fi
+    # gh pr create prints the URL on the last line. Keep only that.
+    PR_URL="$(printf '%s\n' "$PR_URL" | tail -n1)"
+    record "Opened draft PR $PR_URL"
+fi
+
+# --- Step 5: render the task file -----------------------------------------
+
+TEMPLATE="$CLOUDE_ROOT/tasks/TEMPLATE.org"
+if [[ ! -f "$TEMPLATE" ]]; then
+    bail 13 "TEMPLATE not found: $TEMPLATE"
+fi
+
+mkdir -p "$(dirname "$TASK_FILE")"
+
+# task_id = filename minus .org. ID property uses the YYYY-MM-DD-slug form.
+TASK_ID="$(basename "$TASK_FILE" .org)"
+
+# Choose the starting state per mode.
+if [[ "$MODE" == "standard" ]]; then
+    NEW_TODO="PLANNING"
+    NEW_HEADING="$HEADING"
+    ADOPTED_LINE=""
+    NOTES_PRELUDE=""
+else
+    NEW_TODO="ITERATING"
+    NEW_HEADING="$PR_TITLE"
+    ADOPTED_LINE="  :ADOPTED:  t"
+    NOTES_PRELUDE="Adopted from PR $PR_URL — original heading: ADOPT $PR_URL"
+fi
+
+if ! python3 - <<'PY' \
+        "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
+        "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
+        "$NOTES_PRELUDE"
+import re
+import sys
+from pathlib import Path
+
+(_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
+ pr_url, adopted_line, notes_prelude) = sys.argv
+
+text = Path(tmpl).read_text()
+
+# 1. Heading line: replace "* PLANNING <task title>" with the right TODO
+#    and heading; tag stays :user: in both modes.
+text = re.sub(
+    r"^\* PLANNING <task title>\s+:user:\s*$",
+    f"* {todo} {heading}                                                :user:",
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+
+# 2. #+TITLE: <task title>
+text = text.replace("#+TITLE: <task title>", f"#+TITLE: {heading}", 1)
+
+# 3. Properties drawer values.
+text = re.sub(
+    r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.MULTILINE
+)
+text = re.sub(
+    r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.MULTILINE
+)
+text = re.sub(
+    r"^(\s*:BRANCH:\s*)$", rf"\g<1>{branch}", text, count=1, flags=re.MULTILINE
+)
+text = re.sub(
+    r"^(\s*:WORKTREE:\s*)$", rf"\g<1>{worktree}", text, count=1, flags=re.MULTILINE
+)
+text = re.sub(
+    r"^(\s*:PR:\s*)$", rf"\g<1>{pr_url}", text, count=1, flags=re.MULTILINE
+)
+
+# 4. ADOPT-only: insert :ADOPTED: t just before :END: of the properties
+#    drawer. The template doesn't include the property by default, so add.
+if adopted_line:
+    text = re.sub(
+        r"^(\s*:END:\s*)$",
+        adopted_line + "\n" + r"\g<1>",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+# 5. ADOPT-only: prepend a Notes-section line referencing the adopted PR.
+#    The template's "** Notes" section starts with prose body text; we
+#    insert our line above it so the user's later edits don't lose it.
+if notes_prelude:
+    text = re.sub(
+        r"^(\*\* Notes\s*)$",
+        r"\g<1>\n   " + notes_prelude.replace("\\", "\\\\"),
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+Path(dest).write_text(text)
+PY
+then
+    bail 13 "task-file render failed"
+fi
+record "Rendered task file $TASK_FILE"
+
+# --- Step 6: remove the chosen sub-heading from staging.org ----------------
+
+STAGING="$CLOUDE_ROOT/tasks/staging.org"
+if [[ ! -f "$STAGING" ]]; then
+    bail 14 "staging file not found: $STAGING"
+fi
+
+if ! python3 - "$STAGING" "$STAGING_HEADING" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target = sys.argv[2].strip()
+lines = path.read_text().splitlines(keepends=True)
+
+# Find a sub-heading "** <target>" (any trailing tags allowed). Delete
+# from that line up to the next heading at level <= 2.
+def heading_level(line: str) -> int:
+    if not line.startswith("*"):
+        return 0
+    i = 0
+    while i < len(line) and line[i] == "*":
+        i += 1
+    return i if i < len(line) and line[i] == " " else 0
+
+start = -1
+for i, line in enumerate(lines):
+    if heading_level(line) == 2:
+        # Strip trailing tags/whitespace for comparison.
+        body = line[3:].rstrip()
+        # Tags look like ":foo:bar:" at the very end. Drop them.
+        if body.endswith(":") and " :" in body:
+            body = body[:body.rfind(" :")].rstrip()
+        if body == target:
+            start = i
+            break
+
+if start == -1:
+    sys.exit(f"heading not found in {path}: {target!r}")
+
+# Walk forward to find the end: next heading at level <= 2, or EOF.
+end = len(lines)
+for j in range(start + 1, len(lines)):
+    lvl = heading_level(lines[j])
+    if 0 < lvl <= 2:
+        end = j
+        break
+
+del lines[start:end]
+path.write_text("".join(lines))
+PY
+then
+    bail 14 "removing staging entry failed"
+fi
+record "Removed staging entry"
+
+# --- Step 7: create tmux session -------------------------------------------
+
+if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+    bail 20 "tmux session '$TMUX_SESSION' already exists"
+fi
+if ! tmux new-session -d -s "$TMUX_SESSION" -c "$WORKTREE" \
+        "$CLOUDE_ROOT/bin/cloude-run $WORKTREE $TASK_FILE; exec bash"; then
+    bail 20 "tmux new-session failed"
+fi
+record "Created tmux session $TMUX_SESSION"
+
+# --- Step 8: summary -------------------------------------------------------
+
+if [[ "$MODE" == "standard" ]]; then
+    cat <<EOF
+Mode: standard
+Active task file: $TASK_FILE
+Source clone: $SOURCE_CLONE
+Branch: $BRANCH (based on $DEFAULT_BRANCH)
+Worktree: $WORKTREE
+Draft PR: $PR_URL
+tmux session: $TMUX_SESSION (attach with: tmux attach -t $TMUX_SESSION)
+Staging entry removed: yes
+Starting state: PLANNING :user: — waiting for the user's planning prompt.
+EOF
+else
+    cat <<EOF
+Mode: ADOPT (PR #$PR_NUMBER)
+Active task file: $TASK_FILE
+Source clone: $SOURCE_CLONE
+Branch: $BRANCH (tracking origin/$HEAD_REF)
+Worktree: $WORKTREE
+Existing PR: $PR_URL
+tmux session: $TMUX_SESSION (attach with: tmux attach -t $TMUX_SESSION)
+Staging entry removed: yes
+Starting state: ITERATING :user: — waiting for the user's direction on the adopted PR.
+EOF
+fi

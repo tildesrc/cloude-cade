@@ -2,140 +2,48 @@
 description: Finalize an active task — move its org file to tasks/completed/ or tasks/dropped/, kill its tmux session, remove its worktree, and (for COMPLETE) delete the local branch
 ---
 
-You are finalizing an active task — performing the file move and cleanup the in-container agent can't do because the cloude repo is mounted read-only from inside the container. Walk through these steps interactively with the user. Do not skip steps; do not advance past a step until it has succeeded. If any step fails, stop and tell the user exactly what succeeded and what did not so they can clean up.
+You are finalizing an active task — performing the file move and cleanup the in-container agent can't do because the cloude repo is mounted read-only from inside the container. The mechanical chain lives in `bin/cloude-finalize-cleanup`; this skill is a thin wrapper that picks the task and handles the judgment-call cases the script surfaces via distinct exit codes.
 
 The cloude repo root (current working directory when this command was invoked) is the anchor for relative paths below.
 
-## 1. Show active tasks and pick one
+## 1. Pick a task
 
-If a caller (e.g. `/sweep`) has already chosen the task, skip the picker and use that selection — go straight to step 2 with the chosen `tasks/active/<filename>.org`.
+If a caller (e.g. `/sweep`) has already chosen the task, skip the picker and use that absolute path.
 
-Otherwise: list the files under `tasks/active/`. For each, parse the top-level heading to extract:
-
-- the **TODO keyword** (the first whitespace-separated word after the leading `*`)
-- the **heading text** (everything between the keyword and any trailing org tags)
-- the **tag** (`:user:`, `:agent:`, or `:blocked:` on the heading line)
-
-Present them numbered, one per line, in the form:
+Otherwise: run `bin/cloude-list-active`. It prints a numbered list of every active task in stage-priority order, e.g.:
 
 ```
-1. [<TODO> :<tag>:] <heading text>   (tasks/active/<filename>.org)
+1) [COMPLETE :user:] heading text   (tasks/active/2026-05-15-foo.org)
+2) [MERGING :agent:] another task   (tasks/active/2026-05-14-bar.org)
+...
 ```
 
-Ask the user which one to finalize.
+Present the list to the user and ask which one to finalize.
 
-## 2. Read the chosen task file's properties drawer
-
-Extract these properties from the file's `:PROPERTIES: ... :END:` drawer:
-
-- `:WORKTREE:` — absolute worktree path. Sanity check that it starts with `<cloude-root>/worktrees/`.
-- `:BRANCH:` — feature branch name. Sanity check that it begins with `cloude/`.
-- `:PR:` — pull request URL.
-
-Derive:
-
-- `<repo-name>` from the worktree path: `basename $(dirname <WORKTREE>)`.
-- `<source-clone>` = `<cloude-root>/repos/<repo-name>`.
-- `<slug>` from the active filename `YYYY-MM-DD-<slug>.org` (strip the leading `YYYY-MM-DD-` and the trailing `.org`).
-- `<tmux-session>` = `cloude-<slug>`.
-
-If any required property is missing, stop and ask the user to fix the task file first.
-
-## 3. Determine the finalize action
-
-Based on the current TODO keyword:
-
-- `COMPLETE` → finalize as **complete**. Continue.
-- `DROPPED` → finalize as **dropped**. Continue.
-- Anything else (`PLANNING`, `ITERATING`, `REVIEW`, `MERGING`):
-  - Tell the user the task is currently in `<state>` and `/finalize` only force-drops from a non-terminal state — it won't force-complete because COMPLETE requires the agent to verify the PR actually merged.
-  - Ask the user to confirm dropping. If they decline, stop.
-  - On confirmation, update the task file: replace the leading TODO keyword on the heading with `DROPPED` and proceed as a drop.
-
-## 4. Verify (COMPLETE only)
+## 2. Run the cleanup
 
 ```
-gh pr view <pr-url> --json state -q .state
+bin/cloude-finalize-cleanup <abs-task-file>
 ```
 
-Expect `MERGED`. If anything else, stop and tell the user the PR is in `<state>`, the agent set COMPLETE prematurely, and the fix is to set the TODO back to MERGING in the task file and re-run `/finalize` after the merge actually lands.
+On success (exit 0), relay the script's summary block to the user.
 
-## 5. Close the PR (DROPPED only)
+The script verifies the PR is `MERGED` for COMPLETE, closes it for DROPPED, kills the tmux session, removes the worktree, removes the per-task DinD volume, deletes the local branch (COMPLETE only), and moves the task file to `tasks/completed/` or `tasks/dropped/`.
 
-```
-gh pr close <pr-url> --delete-branch=false
-```
+## 3. Handle judgment-call exit codes
 
-Local branch deletion is handled separately below — keep them decoupled.
+The script bails with distinct exit codes when it needs a decision. In each case, surface the script's stderr to the user and ask how to proceed:
 
-## 6. Kill the tmux session
+- **Exit 10** — task is `COMPLETE` but the PR is not in state `MERGED`. The in-container agent set the keyword prematurely. Don't retry from here. Tell the user the fix lives in the task file: flip the TODO back to `MERGING` and let the merge actually land before re-running `/finalize`.
 
-```
-tmux kill-session -t <tmux-session> 2>/dev/null || true
-```
+- **Exit 11** — task is not in `COMPLETE` or `DROPPED`. `/finalize` only force-drops from a non-terminal state (it won't force-complete — COMPLETE requires the agent to verify the merge). Ask the user to confirm dropping. On confirmation, rerun with `--force-drop`; the script flips the keyword to `DROPPED` in-place and proceeds.
 
-Silent if the session doesn't exist. Capture whether it was actually killed (the command's exit status before the `|| true`) so the report can note it.
+- **Exit 12** — worktree has uncommitted/untracked changes, or is locked. The script printed `git status --short`. Ask the user: force-remove (discards everything in the worktree) or abort? On force, rerun with `--force-worktree`.
 
-## 7. Remove the worktree
+- **Exit 13** — DinD volume is still in use. The script listed which containers are holding it. Ask the user: skip the volume cleanup (leaves the volume in place) or abort? On confirm, rerun with `--skip-volume`.
 
-```
-git -C <source-clone> worktree remove <WORKTREE>
-```
+Any other non-zero exit is a hard failure: relay stderr to the user and stop. The script's "Succeeded so far" trail (when present) tells the user what was already done.
 
-If this succeeds, proceed.
+## 4. Report
 
-If it fails — the worktree has uncommitted changes, untracked files, or is locked — **don't silently retry with `--force`**. Surface git's error to the user, list the offending paths (`git -C <WORKTREE> status --short`), and ask whether to:
-
-- **Force-remove** (discards the uncommitted/untracked files inside the worktree, then proceeds), or
-- **Abort** so the user can move/save the files themselves and re-run `/finalize`.
-
-If the user picks force, run `git -C <source-clone> worktree remove --force <WORKTREE>` and continue.
-
-## 8. Remove the per-task DinD volume
-
-The task's in-container dockerd had a dedicated `cloude-dind-<slug>` volume backing `/var/lib/docker` (see `bin/cloude-run`). The cloude container is gone by this point (tmux session was killed in step 6, which exits the `--rm` container), so the volume isn't in use.
-
-```
-docker volume rm cloude-dind-<slug>
-```
-
-Tolerate two non-failure cases:
-
-- The volume doesn't exist (e.g., the task never actually ran a container, or someone already cleaned it manually). Continue silently.
-- The volume rm fails because something else is holding it. Surface the error, list `docker ps -a --filter "volume=cloude-dind-<slug>"`, and ask the user whether to abort or skip the volume removal and continue with the rest of finalize.
-
-## 9. Delete the local branch (COMPLETE only)
-
-```
-git -C <source-clone> branch -D <BRANCH>
-```
-
-`-D` (capital) because the branch may not show as merged into the *local* checkout's HEAD even though it merged upstream. For DROPPED, **skip this step** — leave the local branch in place in case the user wants to revisit the work.
-
-## 10. Move the file in the cloude repo
-
-Task `.org` files are gitignored (each user's task history is local), so a plain `mv` is sufficient — no `git mv`, no commit.
-
-For COMPLETE:
-
-```
-mv <cloude-root>/tasks/active/<filename>.org <cloude-root>/tasks/completed/<filename>.org
-```
-
-For DROPPED:
-
-```
-mv <cloude-root>/tasks/active/<filename>.org <cloude-root>/tasks/dropped/<filename>.org
-```
-
-## 11. Report
-
-Summarize what was done:
-
-- Final state: `COMPLETE` or `DROPPED`
-- Task file: moved from `tasks/active/<filename>.org` to `tasks/<completed|dropped>/<filename>.org`
-- tmux session `<tmux-session>`: killed (or "was not running")
-- Worktree `<WORKTREE>`: removed
-- DinD volume `cloude-dind-<slug>`: removed (or "did not exist")
-- Local branch `<BRANCH>`: deleted (COMPLETE) or preserved (DROPPED)
-- PR `<pr-url>`: confirmed MERGED (COMPLETE) or closed (DROPPED)
+The script prints its own summary block on success. Just relay it.

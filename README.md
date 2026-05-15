@@ -411,9 +411,63 @@ commands:
   current TODO state, asks which to finalize. For `COMPLETE`,
   verifies the PR is merged, kills the tmux session, removes the
   worktree, removes the task's `cloude-dind-<slug>` DinD volume,
-  deletes the local branch, and `git mv`s the task file to
+  deletes the local branch, and moves the task file to
   `tasks/completed/`. For `DROPPED`, closes the PR, kills the tmux
   session, removes the worktree, removes the DinD volume, preserves
-  the local branch, and `git mv`s the file to `tasks/dropped/`.
+  the local branch, and moves the file to `tasks/dropped/`.
   Force-drop is allowed from any non-terminal state; force-complete
   is not (COMPLETE requires the agent to have verified the merge).
+
+### Helper scripts in `bin/`
+
+`/promote`, `/sweep`, and `/finalize` are thin interactive wrappers
+around a small set of `bin/` orchestrators. Each script is callable
+by hand too (e.g. for scripting outside the skills, or when
+debugging). Scripts that read or edit `.org` files are Python with a
+PEP 723 inline-deps header (same pattern as `bin/cloude-dash`) and
+are intended to be run via `uv` — see the Dashboard section for the
+`orgparse` install story.
+
+- **`cloude-list-staging`** — Print promotable ideas from
+  `tasks/staging.org` numbered globally, plus a trailing
+  `TODO_PROJECTS <n>` count of personal-TODO projects (no `:REPO:`)
+  that `/promote` skips. Used by `/promote` step 1.
+- **`cloude-list-active`** — Print active tasks under
+  `tasks/active/`, numbered, sorted by stage priority (matching the
+  dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
+  `--terminal`, filters to `COMPLETE`/`DROPPED`; if the filtered set
+  is empty, prints exactly `No tasks awaiting finalize.` and exits 0
+  — this is `/sweep`'s idle-tick output and what makes a `/loop
+  /sweep` cheap. Used by `/sweep` and `/finalize` step 1.
+- **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
+  lines for the heading TODO/tag/text, the properties drawer
+  (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
+  `COMPANION_PR` when present), and derived fields (`SLUG`,
+  `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
+  `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup`. Exit 3
+  names the missing key when a required property is absent.
+- **`cloude-promote-setup`** — Bash orchestrator for `/promote`
+  steps 4-9: ensure source clone, create worktree + branch, push
+  (standard) or fetch (ADOPT), open draft PR (standard only),
+  render task file from `tasks/TEMPLATE.org`, remove staging entry,
+  start tmux session. Distinct non-zero exit codes per failure mode
+  (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal, 20
+  tmux collision, 30 arg validation) and a "Succeeded so far" trail
+  on stderr.
+- **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
+  `/finalize` steps 4-10: verify/close PR, kill tmux, remove
+  worktree, remove DinD volume, delete branch (COMPLETE only), move
+  task file. Bails with distinct exit codes for the four
+  judgment-call cases:
+  - `10` — PR not in state `MERGED` (the agent set `COMPLETE`
+    prematurely).
+  - `11` — task TODO is not `COMPLETE`/`DROPPED`. Pass
+    `--force-drop` to flip to `DROPPED` and proceed.
+  - `12` — worktree dirty/locked. Pass `--force-worktree` to retry
+    with `git worktree remove --force`.
+  - `13` — DinD volume still in use. Pass `--skip-volume` to leave
+    it in place.
+
+  The skill is responsible for prompting the user and rerunning with
+  the matching override; the script itself has no interactive
+  fallback logic.

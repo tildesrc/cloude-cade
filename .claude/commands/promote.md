@@ -2,196 +2,108 @@
 description: Promote an idea from tasks/staging.org into an active task (file, branch, worktree, draft PR, tmux session)
 ---
 
-You are promoting an idea from `tasks/staging.org` into an active task. Walk through these steps interactively with the user. Do not skip steps; do not advance past a step until it has succeeded. If any step fails, stop and tell the user exactly what succeeded and what did not so they can clean up.
+You are promoting an idea from `tasks/staging.org` into an active task. The mechanical chain (clone, worktree, branch, PR, task file, staging removal, tmux session) lives in `bin/cloude-promote-setup`. This skill is a thin interactive wrapper: it picks the idea, detects standard vs ADOPT mode, derives the slug, then hands off to the script. If anything fails, stop and tell the user what the script reported succeeded vs. failed.
 
 The cloude repo root (current working directory when this command was invoked) is the anchor for relative paths below.
 
 ## Two modes: standard vs ADOPT
 
-There are two flavors of promotion:
+- **Standard**: the typical case — fresh `cloude/<slug>` branch off the default branch, new draft PR, initial state `PLANNING :user:`.
+- **ADOPT**: the chosen idea's heading is `ADOPT <PR url>`. No new branch or PR — the script checks out the existing PR's branch as a worktree. Initial state `ITERATING :user:`.
 
-- **Standard**: the typical case. The idea is a new piece of work, so the skill creates a fresh `cloude/<slug>` branch off the default branch and opens a draft PR. Initial state is `PLANNING :user:`.
-- **ADOPT**: the idea heading is exactly `ADOPT <PR url>` (e.g., `ADOPT https://github.com/acme-co/acme-webapp/pull/123`). The skill **doesn't** create a new branch or PR — it adopts the existing PR's branch into a worktree and starts the task in `ITERATING :user:` (so the user can give the agent further direction without going through PLANNING).
-
-Each numbered step below calls out when ADOPT behaves differently.
+The mode determines which flags are passed to `cloude-promote-setup`.
 
 ## 1. Show staging contents and pick an idea
 
-Read `tasks/staging.org`. Parse it:
+Run:
 
-- Top-level headings (`*`) are projects. **Filter to projects that have a `:REPO:` property** — those are the promotable ones. A top-level heading without `:REPO:` is a "TODO project" whose sub-headings are personal TODOs the user works on without an agent (see `bin/cloude-dash`'s TODO section). `/promote` skips those entirely.
-- Sub-headings (`**`) under each promotable project are ideas.
+```
+bin/cloude-list-staging
+```
 
-Present the ideas grouped by project, numbered globally so the user can pick by number. If you found any TODO projects (no `:REPO:`), mention that as one short line above the listing — e.g. `(TODO-project ideas under "Non-cloude" omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask the user which one to promote.
+Output looks like:
 
-If the user names a TODO-project idea by some out-of-band shortcut, refuse with: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
+```
+PROMOTABLE
+1) [project-name] idea heading text  [ADOPT]
+2) [project-name] another idea
+...
+TODO_PROJECTS  <count>
+```
+
+Present the numbered `PROMOTABLE` lines to the user. If `TODO_PROJECTS` is non-zero, print one short note above the listing: `(<count> TODO-project ideas omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask which one to promote.
+
+To recover the staging context for the chosen number, re-read `tasks/staging.org` directly — you'll need the exact idea heading text (for `--staging-heading` and ADOPT-URL extraction) and the project's `:REPO:` property.
+
+If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 
 ## 2. Detect mode and (if ADOPT) gather PR details
 
-If the chosen idea's heading text starts with `ADOPT ` followed by a URL, you're in **ADOPT mode**. Otherwise you're in **standard mode**.
+The `[ADOPT]` suffix in step 1's output is the mode marker. Equivalently: the idea heading text starts with `ADOPT `.
 
-For ADOPT mode:
+For ADOPT mode, extract the PR URL (everything after `ADOPT `) and query the PR:
 
-- Extract the PR URL from the heading (everything after `ADOPT `).
-- Query the PR:
-  ```
-  gh pr view <pr-url> --json number,title,state,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository
-  ```
-- **Refuse to proceed** if any of these fail:
-  - `state != "OPEN"` — abort and tell the user what state the PR is in. `/finalize` handles closed/merged PRs; this skill only adopts open ones.
-  - `isCrossRepository == true` — abort. We can't push to a fork's branch without configuring an extra remote, and the workflow assumes you can push back to where the PR lives.
-  - The PR's repo doesn't match the project's `:REPO:` URL — abort with a clear "PR repo doesn't match the staging project's :REPO:" message.
-- Store as `<pr-url>`, `<pr-number>`, `<pr-title>`, `<head-ref-name>` (the PR's branch), `<base-ref-name>` (its base branch). These replace the values that the standard flow would normally derive from staging text + default branch.
+```
+gh pr view <pr-url> --json number,title,state,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository
+```
+
+Refuse to proceed if any of these fail:
+
+- `state != "OPEN"` — `/finalize` handles closed/merged PRs; this skill only adopts open ones.
+- `isCrossRepository == true` — we can't push to a fork's branch without an extra remote.
+- The PR's repo doesn't match the project's `:REPO:` URL.
+
+Record `<pr-url>`, `<pr-number>`, `<pr-title>`, `<head-ref-name>`, `<base-ref-name>`.
+
+For standard mode, look up the default branch:
+
+```
+gh repo view <owner>/<repo> --json defaultBranchRef -q .defaultBranchRef.name
+```
+
+(`<owner>/<repo>` is parsed from the project's `:REPO:` URL — both `git@github.com:OWNER/REPO[.git]` and `https://github.com/OWNER/REPO[.git]` forms are supported by the orchestrator.)
 
 ## 3. Confirm the slug
 
-**Standard mode** — auto-derive a slug from the chosen idea's heading text:
+- **Standard mode** — derive from the idea heading: lowercase, replace non-alphanumerics with `-`, collapse repeats, trim. E.g. `"Hook to auto-move COMPLETE files"` → `hook-to-auto-move-complete-files`.
+- **ADOPT mode** — derive from `<head-ref-name>` using the same rules (slashes in branch names become hyphens). The worktree's local branch uses the verbatim `<head-ref-name>` so pushes go to the right upstream.
 
-- Lowercase
-- Replace non-alphanumerics with hyphens
-- Collapse repeated hyphens
-- Trim leading/trailing hyphens
+Show the proposed slug to the user and ask them to confirm or override. Compute the task file path: `<cloude-root>/tasks/active/$(date +%F)-<slug>.org`.
 
-**ADOPT mode** — auto-derive the slug from `<head-ref-name>` (the PR's branch) using the same rules. E.g., `feature/wire-config-volume` becomes `feature-wire-config-volume`. The slug only needs to be a safe filesystem/tmux name; the worktree's local branch will use the verbatim `<head-ref-name>` so pushes go to the right place.
-
-Show the proposed slug to the user and ask them to confirm or override.
-
-## 4. Determine repo info and ensure the source clone exists
-
-From the project's `:REPO:` URL (same logic in both modes):
-
-- Extract the **owner** and **repo name** (handle both forms — `git@github.com:OWNER/REPO[.git]` and `https://github.com/OWNER/REPO[.git]`).
-- Compute the **HTTPS clone URL**: `https://github.com/<owner>/<repo>.git`. We want the remote in HTTPS form so the in-container `git push` (which has no SSH keys, only a forwarded `GH_TOKEN`) works.
-- The source clone lives at `<cloude-root>/repos/<repo-name>`. If it doesn't exist yet, clone it via `gh repo clone` (which uses gh's auth, so private repos work even when the host has no git credential helper configured globally), normalize the remote to HTTPS, and configure the gh credential helper for this repo:
-  ```
-  mkdir -p <cloude-root>/repos
-  gh repo clone <owner>/<repo> <cloude-root>/repos/<repo-name>
-  git -C <cloude-root>/repos/<repo-name> remote set-url origin <https-clone-url>
-  git -C <cloude-root>/repos/<repo-name> \
-      config credential."https://github.com".helper '!gh auth git-credential'
-  ```
-  Why each step:
-  - `gh repo clone` instead of `git clone` — `gh` always carries the user's PAT, so private repos clone without the host needing a global git credential helper. Plain `git clone` of a private repo fails with "could not read Username".
-  - `remote set-url origin <https-clone-url>` — `gh repo clone` honors gh's configured `git_protocol` (which can be ssh). We want HTTPS regardless, so the in-container container can push using the forwarded `GH_TOKEN` rather than SSH keys it doesn't have.
-  - The per-repo credential helper makes all subsequent `git fetch`/`push` against this clone auth through `gh` on the host (and the container's `/etc/gitconfig` configures the same helper for inside the container).
-- **Standard mode only**: detect the default branch:
-  ```
-  gh repo view <owner>/<repo> --json defaultBranchRef -q .defaultBranchRef.name
-  ```
-  Store as `<default-branch>`. (ADOPT mode uses `<base-ref-name>` from step 2 instead.)
-
-Store as `<repo-name>`, `<source-clone>`.
-
-## 5. Create the worktree and branch
-
-Compute the absolute worktree path: `<cloude-root>/worktrees/<repo-name>/<slug>`. Make sure the parent directory exists (`mkdir -p`).
-
-**Standard mode** — fetch the default branch and create a new local branch `cloude/<slug>` off it:
+## 4. Run the setup
 
 ```
-git -C <source-clone> fetch origin <default-branch>
-git -C <source-clone> worktree add -b cloude/<slug> <abs-worktree-path> origin/<default-branch>
+bin/cloude-promote-setup \
+  --mode <standard|adopt> \
+  --slug <slug> \
+  --repo-url <repo-url> \
+  --task-file <abs-task-file> \
+  --staging-heading <exact-idea-heading-text>
 ```
 
-Push the new branch so a PR can be opened:
+Plus mode-specific flags:
 
-```
-git -C <abs-worktree-path> push -u origin cloude/<slug>
-```
+- **Standard**: `--heading <idea-heading-text>` `--default-branch <default-branch>`
+- **ADOPT**: `--head-ref <head-ref-name>` `--base-ref <base-ref-name>` `--pr-url <pr-url>` `--pr-title <pr-title>` `--pr-number <pr-number>`
 
-**ADOPT mode** — fetch the PR's existing branch and create a worktree tracking it. **Don't** push (the branch already exists upstream).
+The script ensures the source clone exists, creates the worktree + branch, opens the draft PR (standard only), renders the task file from `tasks/TEMPLATE.org`, removes the idea from `tasks/staging.org`, and starts the detached tmux session.
 
-```
-git -C <source-clone> fetch origin <head-ref-name>:refs/remotes/origin/<head-ref-name>
-git -C <source-clone> worktree add -b <head-ref-name> <abs-worktree-path> origin/<head-ref-name>
-```
+On success (exit 0), relay the script's summary block.
 
-If a local branch named `<head-ref-name>` already exists in the source clone (rare — only if the user manually checked it out before), use `-B` instead of `-b` (or stop and ask). The new local branch tracks `origin/<head-ref-name>`, so `git push` from inside the worktree pushes back to the right upstream branch.
+On failure, the script's stderr includes a "Succeeded so far" list so the user can clean up the partial state. Exit codes:
 
-## 6. Open the draft PR (standard mode only)
+- `10` — source clone setup failed.
+- `11` — worktree creation failed.
+- `12` — `gh pr create` failed (standard only).
+- `13` — task-file render failed.
+- `14` — staging entry not found / removal failed (the heading text didn't match what's in `tasks/staging.org`).
+- `20` — tmux session name `cloude-<slug>` already exists. Ask the user how to proceed (kill the existing session, pick a different slug, or abort) — don't retry without explicit user direction.
+- `30` — argument validation failed (a required flag was missing or malformed).
 
-**Standard mode**:
+## 5. Companion-PR detection (optional, post-render)
 
-```
-git -C <abs-worktree-path> ...
-gh pr create --draft --base <default-branch> --head cloude/<slug> \
-  --title "<idea heading text>" \
-  --body "Draft PR for task <YYYY-MM-DD>-<slug>. Plan to follow."
-```
+If the chosen idea's heading text clearly names a sibling PR this task is paired with — patterns like `"acme-webapp changes for https://github.com/.../pull/124"` or `"Frontend for PR #123"` — add a `:COMPANION_PR:` property to the new task file's properties drawer with the referenced PR's full URL, and add a one-line note in the Notes section. This is judgment-call pattern matching; don't try to be clever. See `README.md` for the property's documented meaning.
 
-Capture the returned PR URL as `<pr-url>`.
+## 6. Report
 
-**ADOPT mode** — skip this step entirely. We already have `<pr-url>` from step 2.
-
-## 7. Create the active task file
-
-```
-cp <cloude-root>/tasks/TEMPLATE.org <cloude-root>/tasks/active/<YYYY-MM-DD>-<slug>.org
-```
-
-(Use today's date in `YYYY-MM-DD` format.)
-
-Edit the new file. The properties drawer is the same in both modes; the heading line and starting state differ:
-
-| Field            | Standard mode                              | ADOPT mode                                   |
-| ---------------- | ------------------------------------------ | -------------------------------------------- |
-| Heading TODO     | `PLANNING`                                 | `ITERATING`                                  |
-| Heading tag      | `:user:`                                   | `:user:`                                     |
-| Heading text     | `<idea heading text>`                      | `<pr-title>` (the PR's title from step 2)    |
-| `:ID:`           | `<YYYY-MM-DD>-<slug>`                      | same                                         |
-| `:REPO:`         | the project's `:REPO:` URL                 | same                                         |
-| `:BRANCH:`       | `cloude/<slug>`                            | `<head-ref-name>` (the PR's actual branch)   |
-| `:WORKTREE:`     | the absolute worktree path                 | same                                         |
-| `:PR:`           | `<pr-url>` from step 6                     | `<pr-url>` from step 2                       |
-| `:AGENT:`        | blank                                      | blank                                        |
-
-In ADOPT mode, also add a `:ADOPTED:` property set to `t` (or any truthy value) so it's easy to grep for adopted tasks later, and add a brief Notes line: `Adopted from PR <pr-url> — original heading: ADOPT <pr-url>`.
-
-**Companion-task detection (both modes)** — if the staging heading text references another PR (e.g., `acme-webapp changes for https://github.com/.../pull/124` or `Frontend for PR #123`), add a `:COMPANION_PR:` property to the drawer with the referenced PR's full URL. Don't try to parse fancy patterns; if the heading clearly names a sibling PR that this task is paired with, capture it. Note the companion link in the `Notes` section too. See `README.md` for the property's documented meaning.
-
-If the staging entry had body content, move it into the `Notes` section. Leave `Goal`, `Context`, and `Acceptance criteria` for the user to fill in.
-
-## 8. Remove the entry from tasks/staging.org
-
-Delete the chosen idea sub-heading and its body from `tasks/staging.org`. Leave the project heading in place even if no ideas remain under it.
-
-`tasks/staging.org` and the new `tasks/active/<...>.org` are both gitignored (task tracking is local-per-user), so there's no commit step — the edits just live in the working tree.
-
-## 9. Create the tmux session and launch the container
-
-Create a detached tmux session that runs `bin/cloude-run` in the worktree:
-
-```
-tmux new-session -d -s cloude-<slug> -c <abs-worktree-path> \
-  "<cloude-root>/bin/cloude-run <abs-worktree-path> <abs-task-file-path>; exec bash"
-```
-
-The trailing `exec bash` keeps the pane alive after the container exits.
-
-If a session named `cloude-<slug>` already exists, stop and ask the user how to proceed (kill the existing one, rename, or abort).
-
-## 10. Report
-
-Summarize what was done. Standard mode:
-
-- Mode: standard
-- Active task file: `tasks/active/<YYYY-MM-DD>-<slug>.org`
-- Source clone: `<source-clone>`
-- Branch: `cloude/<slug>` (based on `<default-branch>`)
-- Worktree: `<abs-worktree-path>`
-- Draft PR: `<pr-url>`
-- tmux session: `cloude-<slug>` (attach with `tmux attach -t cloude-<slug>`)
-- Staging entry removed.
-- Starting state: `PLANNING :user:` — waiting for the user's planning prompt.
-
-ADOPT mode:
-
-- Mode: ADOPT (PR #`<pr-number>`)
-- Active task file: `tasks/active/<YYYY-MM-DD>-<slug>.org`
-- Source clone: `<source-clone>`
-- Branch: `<head-ref-name>` (tracking `origin/<head-ref-name>`)
-- Worktree: `<abs-worktree-path>`
-- Existing PR: `<pr-url>`
-- tmux session: `cloude-<slug>` (attach with `tmux attach -t cloude-<slug>`)
-- Staging entry removed.
-- Starting state: `ITERATING :user:` — waiting for the user's direction on what to do with the adopted PR.
+Relay the script's summary block plus any companion-PR addition from step 5.

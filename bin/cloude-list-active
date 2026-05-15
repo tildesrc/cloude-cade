@@ -1,0 +1,113 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["orgparse>=0.4"]
+# ///
+# List active task files for /sweep and /finalize.
+#
+# Default output (stdout):
+#
+#   1) [PLANNING :user:] task heading text  (tasks/active/2026-05-15-foo.org)
+#   2) [MERGING :agent:] another task       (tasks/active/2026-05-14-bar.org)
+#
+# Sorted by stage priority (matching cloude-dash's STAGE_ORDER), then
+# filename, so the listing is stable across runs.
+#
+# With --terminal: filters to TODO ∈ {COMPLETE, DROPPED}. If the
+# filtered set is empty, prints exactly:
+#
+#   No tasks awaiting finalize.
+#
+# …and exits 0 (this is /sweep's idle-tick output).
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+try:
+    import orgparse
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-list-active: orgparse is required.\n"
+        "Launch via 'uv run bin/cloude-list-active' (uv handles deps),\n"
+        "or 'pip install --user orgparse' and rerun.\n"
+    )
+    sys.exit(2)
+
+
+CLOUDE_ROOT = Path(
+    os.environ.get("CLOUDE_ROOT") or Path(__file__).resolve().parent.parent
+)
+ACTIVE = CLOUDE_ROOT / "tasks" / "active"
+
+# Match cloude-dash so the ordering is consistent across tools.
+STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
+TERMINAL_STATES = {"COMPLETE", "DROPPED"}
+BALL_TAGS = ("agent", "user", "blocked")
+
+
+def _ball_tag(tags) -> str:
+    for t in BALL_TAGS:
+        if t in tags:
+            return t
+    return ""
+
+
+def _load_task(path: Path):
+    try:
+        root = orgparse.load(str(path))
+    except Exception:
+        return None
+    headings = list(root.children)
+    if not headings:
+        return None
+    h = headings[0]
+    return (
+        (h.todo or "").strip(),
+        _ball_tag(h.tags),
+        str(h.heading).strip(),
+        path,
+    )
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="List active tasks.")
+    parser.add_argument(
+        "--terminal",
+        action="store_true",
+        help="Only list tasks in COMPLETE or DROPPED.",
+    )
+    args = parser.parse_args(argv)
+
+    rows = []
+    if ACTIVE.is_dir():
+        for p in sorted(ACTIVE.glob("*.org")):
+            t = _load_task(p)
+            if t:
+                rows.append(t)
+
+    if args.terminal:
+        rows = [r for r in rows if r[0] in TERMINAL_STATES]
+        if not rows:
+            print("No tasks awaiting finalize.")
+            return 0
+
+    rows.sort(key=lambda r: (STAGE_ORDER.get(r[0], 99), r[3].name))
+
+    for i, (todo, tag, heading, path) in enumerate(rows, start=1):
+        tag_str = f":{tag}:" if tag else ""
+        # Path printed relative to CLOUDE_ROOT for terseness, like prose
+        # in the skills uses ("tasks/active/<filename>.org").
+        try:
+            rel = path.relative_to(CLOUDE_ROOT)
+        except ValueError:
+            rel = path
+        print(f"{i}) [{todo} {tag_str}] {heading}  ({rel})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

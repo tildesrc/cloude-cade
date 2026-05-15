@@ -1,0 +1,122 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["orgparse>=0.4"]
+# ///
+# Read a task .org file's heading + properties drawer and emit
+# shell-safe KEY=VALUE lines on stdout. Designed to be `source`d by
+# bash orchestrators that need the same metadata /finalize asks for.
+#
+# Keys emitted (always; empty if unknown):
+#   TODO, TAG, HEADING
+# From the properties drawer:
+#   WORKTREE, BRANCH, PR, REPO, ID, ADOPTED, COMPANION_PR
+# Derived:
+#   SLUG          — filename minus YYYY-MM-DD- prefix and .org suffix
+#   REPO_NAME     — basename(dirname(WORKTREE))
+#   SOURCE_CLONE  — <cloude-root>/repos/<REPO_NAME>
+#   TMUX_SESSION  — cloude-<SLUG>
+#   DIND_VOLUME   — cloude-dind-<SLUG>
+#
+# Values are shlex.quote'd so the output can be `source`d directly.
+# Exit codes:
+#   0 — success.
+#   2 — file doesn't exist or has no top-level heading.
+#   3 — required property missing (WORKTREE, BRANCH, PR). stderr names
+#       the missing key so callers can tell the user what to fix.
+
+from __future__ import annotations
+
+import shlex
+import sys
+from pathlib import Path
+
+try:
+    import orgparse
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-task-info: orgparse is required.\n"
+        "Launch via 'uv run bin/cloude-task-info' (uv handles deps),\n"
+        "or 'pip install --user orgparse' and rerun.\n"
+    )
+    sys.exit(2)
+
+
+REQUIRED = ("WORKTREE", "BRANCH", "PR")
+OPTIONAL = ("REPO", "ID", "ADOPTED", "COMPANION_PR")
+BALL_TAGS = ("agent", "user", "blocked")
+
+
+def _ball_tag(tags) -> str:
+    for t in BALL_TAGS:
+        if t in tags:
+            return t
+    return ""
+
+
+def _slug_from_filename(path: Path) -> str:
+    name = path.stem
+    # tasks/active/YYYY-MM-DD-<slug>.org → <slug>
+    if len(name) > 11 and name[4] == "-" and name[7] == "-" and name[10] == "-":
+        return name[11:]
+    return name
+
+
+def _emit(key: str, value: str) -> None:
+    print(f"{key}={shlex.quote(value)}")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        sys.stderr.write("usage: cloude-task-info <task-file>\n")
+        return 2
+    path = Path(argv[0]).resolve()
+    if not path.is_file():
+        sys.stderr.write(f"cloude-task-info: file not found: {path}\n")
+        return 2
+    try:
+        root = orgparse.load(str(path))
+    except Exception as exc:
+        sys.stderr.write(f"cloude-task-info: failed to parse {path}: {exc}\n")
+        return 2
+    headings = list(root.children)
+    if not headings:
+        sys.stderr.write(f"cloude-task-info: no top-level heading in {path}\n")
+        return 2
+    h = headings[0]
+    props = dict(h.properties) if h.properties else {}
+
+    missing = [k for k in REQUIRED if not (props.get(k) or "").strip()]
+    if missing:
+        sys.stderr.write(
+            f"cloude-task-info: required propert{'y' if len(missing) == 1 else 'ies'} "
+            f"missing in {path}: {', '.join(missing)}\n"
+        )
+        return 3
+
+    _emit("TODO", (h.todo or "").strip())
+    _emit("TAG", _ball_tag(h.tags))
+    _emit("HEADING", str(h.heading).strip())
+
+    for key in REQUIRED + OPTIONAL:
+        _emit(key, (props.get(key) or "").strip())
+
+    slug = _slug_from_filename(path)
+    worktree = props["WORKTREE"].strip()
+    repo_name = Path(worktree).parent.name
+    # Task files always live at <cloude-root>/tasks/active/<file>.org, so
+    # the file path itself anchors cloude-root reliably — no need to
+    # depend on this script's install location or an env var.
+    cloude_root = path.parent.parent.parent
+
+    _emit("SLUG", slug)
+    _emit("REPO_NAME", repo_name)
+    _emit("SOURCE_CLONE", str(cloude_root / "repos" / repo_name))
+    _emit("TMUX_SESSION", f"cloude-{slug}")
+    _emit("DIND_VOLUME", f"cloude-dind-{slug}")
+    _emit("CLOUDE_ROOT", str(cloude_root))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

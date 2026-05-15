@@ -1,0 +1,85 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["orgparse>=0.4"]
+# ///
+# List promotable ideas from tasks/staging.org for /promote.
+#
+# Output (stdout):
+#
+#   PROMOTABLE
+#   1) [project-heading] idea heading text  [ADOPT]
+#   2) [project-heading] another idea
+#   ...
+#   TODO_PROJECTS  <count>
+#
+# Where:
+#   - Top-level headings with a :REPO: property are promotable projects;
+#     their sub-headings are listed (numbered globally so /promote can
+#     index by integer).
+#   - [ADOPT] suffix is appended when the idea heading starts with
+#     "ADOPT " (the ADOPT-mode trigger documented in promote.md).
+#   - TODO_PROJECTS gives the count of top-level headings without
+#     :REPO: (personal-TODO projects, not promotable). /promote uses
+#     it to print the one-line "(TODO-project ideas omitted)" notice
+#     without re-parsing the file.
+#
+# Exit 0 on success (including empty staging); exit 2 if the file
+# can't be parsed.
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+try:
+    import orgparse
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-list-staging: orgparse is required.\n"
+        "Launch via 'uv run bin/cloude-list-staging' (uv handles deps),\n"
+        "or 'pip install --user orgparse' and rerun.\n"
+    )
+    sys.exit(2)
+
+
+# Honor an explicit CLOUDE_ROOT (bin/cloude-run exports this into the
+# container) before falling back to the script-location heuristic.
+CLOUDE_ROOT = Path(
+    os.environ.get("CLOUDE_ROOT") or Path(__file__).resolve().parent.parent
+)
+STAGING = CLOUDE_ROOT / "tasks" / "staging.org"
+
+
+def main() -> int:
+    if not STAGING.exists():
+        print("PROMOTABLE")
+        print("TODO_PROJECTS 0")
+        return 0
+    try:
+        root = orgparse.load(str(STAGING))
+    except Exception as exc:
+        sys.stderr.write(f"cloude-list-staging: failed to parse {STAGING}: {exc}\n")
+        return 2
+
+    print("PROMOTABLE")
+    n = 0
+    todo_projects = 0
+    for project in root.children:
+        props = dict(project.properties) if project.properties else {}
+        if not props.get("REPO"):
+            todo_projects += 1
+            continue
+        project_name = str(project.heading).strip()
+        for idea in project.children:
+            n += 1
+            idea_title = str(idea.heading).strip()
+            suffix = "  [ADOPT]" if idea_title.startswith("ADOPT ") else ""
+            print(f"{n}) [{project_name}] {idea_title}{suffix}")
+    print(f"TODO_PROJECTS {todo_projects}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
