@@ -108,8 +108,10 @@ open a branch in. Ideas live as sub-headings under their project:
 
 A top-level heading **without** `:REPO:` is treated as a **TODO
 project** — its sub-headings are personal TODOs the user works on
-themselves, not promotable agent-driven tasks. They appear in the
-dashboard's `TODO` section and are skipped by `/promote`:
+themselves, not promotable agent-driven tasks. On the dashboard each
+entry appears under a section header that matches its org TODO
+keyword (`DONE`, `WAITING`, …), with entries that have no keyword
+falling back to a default `TODO` section. `/promote` skips them:
 
 ```org
 * Non-cloude
@@ -164,7 +166,7 @@ ordinary tasks.
 
 `bin/cloude-dash` is a curses TUI that surfaces the state of every task
 in one screen. It parses each `tasks/**/*.org` file with `orgparse` and
-renders four sections:
+renders the following sections:
 
 - **ACTIVE** — one row per file in `tasks/active/`, sorted by stage
   priority (`MERGING` first, then `REVIEW`, `ITERATING`, `PLANNING`).
@@ -173,10 +175,14 @@ renders four sections:
   the PR number from the `:PR:` property.
 - **STAGING** — idea sub-headings under top-level projects that have a
   `:REPO:` property (i.e. promotable via `/promote`).
-- **TODO** — idea sub-headings under top-level projects that have no
-  `:REPO:` (personal TODOs the user works on without an agent).
-  Prefixed with the project name in brackets, e.g. `[Non-cloude] …`.
-  Not promotable.
+- **One section per TODO keyword** for idea sub-headings under
+  top-level projects that have no `:REPO:` (personal TODOs the user
+  works on without an agent). The keyword itself is the section
+  header — e.g. `DONE`, `WAITING`. Entries with no keyword fall back
+  to a default `TODO` header. These sections render alphabetically by
+  keyword between `STAGING` and `RECENT`, and each row is prefixed
+  with the project name in brackets (e.g. `[Live Nation] …`). Not
+  promotable.
 - **RECENT** — the 20 most-recently-touched files from
   `tasks/completed/` and `tasks/dropped/`.
 

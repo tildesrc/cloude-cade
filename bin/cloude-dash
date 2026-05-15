@@ -96,48 +96,64 @@ def _load_single_task_file(path: Path, section: str) -> Task | None:
     )
 
 
-def _load_staging(path: Path) -> tuple[list[Task], list[Task]]:
-    """Split staging children into (staging, todo).
+def _load_staging(path: Path) -> tuple[list[Task], dict[str, list[Task]]]:
+    """Split staging children into (staging, todo_sections).
 
-    A top-level project heading with a `:REPO:` property holds
-    promotable ideas (STAGING). One without `:REPO:` holds personal
-    TODOs that `/promote` skips and the dashboard renders separately.
+    Projects with a `:REPO:` property hold promotable ideas, which go
+    into `staging`. Projects without `:REPO:` hold personal todos; we
+    bucket their entries by org TODO keyword (`DONE`, `WAITING`, …)
+    so the dashboard can render a section header per keyword. Entries
+    that have no TODO keyword fall back to a default `TODO` bucket.
     """
     if not path.exists():
-        return [], []
+        return [], {}
     try:
         root = orgparse.load(str(path))
     except Exception:
-        return [], []
+        return [], {}
     staging: list[Task] = []
-    todo: list[Task] = []
+    todo_sections: dict[str, list[Task]] = {}
     mtime = path.stat().st_mtime
     for project in root.children:
         props = dict(project.properties) if project.properties else {}
         is_promotable = bool(props.get("REPO"))
-        bucket = staging if is_promotable else todo
-        section = STAGING if is_promotable else TODO
         project_name = str(project.heading).strip()
         for idea in project.children:
             idea_title = str(idea.heading).strip()
-            # TODO rows carry the parent project name as a prefix so
-            # the dashboard shows grouping without a sub-header.
-            title = idea_title if is_promotable else f"[{project_name}] {idea_title}"
-            bucket.append(
-                Task(
-                    section=section,
-                    state="",
-                    tag=_ball_tag(idea.tags),
-                    title=title,
-                    pr_url=None,
-                    path=path,
-                    mtime=mtime,
+            tag = _ball_tag(idea.tags)
+            if is_promotable:
+                staging.append(
+                    Task(
+                        section=STAGING,
+                        state="",
+                        tag=tag,
+                        title=idea_title,
+                        pr_url=None,
+                        path=path,
+                        mtime=mtime,
+                    )
                 )
-            )
-    return staging, todo
+            else:
+                keyword = (idea.todo or "").strip() or TODO
+                # Non-repo rows carry the parent project name as a
+                # prefix so the dashboard shows project grouping
+                # alongside the TODO-keyword grouping.
+                title = f"[{project_name}] {idea_title}"
+                todo_sections.setdefault(keyword, []).append(
+                    Task(
+                        section=keyword,
+                        state="",
+                        tag=tag,
+                        title=title,
+                        pr_url=None,
+                        path=path,
+                        mtime=mtime,
+                    )
+                )
+    return staging, todo_sections
 
 
-def load_tasks() -> dict[str, list[Task]]:
+def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
     active: list[Task] = []
     for p in sorted((TASKS / "active").glob("*.org")):
         t = _load_single_task_file(p, ACTIVE)
@@ -145,7 +161,7 @@ def load_tasks() -> dict[str, list[Task]]:
             active.append(t)
     active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
 
-    staging, todo = _load_staging(TASKS / "staging.org")
+    staging, todo_sections = _load_staging(TASKS / "staging.org")
 
     recent: list[Task] = []
     for sub, label in (("completed", "COMPLETE"), ("dropped", "DROPPED")):
@@ -161,7 +177,12 @@ def load_tasks() -> dict[str, list[Task]]:
     recent.sort(key=lambda t: t.mtime, reverse=True)
     recent = recent[:RECENT_LIMIT]
 
-    return {ACTIVE: active, STAGING: staging, TODO: todo, RECENT: recent}
+    return {
+        ACTIVE: active,
+        STAGING: staging,
+        TODO: todo_sections,
+        RECENT: recent,
+    }
 
 
 # --- rendering -------------------------------------------------------------
@@ -172,22 +193,30 @@ ROW_TASK = "task"
 ROW_EMPTY = "empty"
 
 
-def _flatten(groups: dict[str, list[Task]]) -> list[tuple[str, object]]:
+def _flatten(
+    groups: dict[str, list[Task] | dict[str, list[Task]]],
+) -> list[tuple[str, object]]:
     rows: list[tuple[str, object]] = []
-    for section in (ACTIVE, STAGING, TODO, RECENT):
-        items = groups[section]
-        label = {
-            ACTIVE: f"ACTIVE ({len(items)})",
-            STAGING: f"STAGING ({len(items)})",
-            TODO: f"TODO ({len(items)})",
-            RECENT: f"RECENT ({len(items)})",
-        }[section]
-        rows.append((ROW_HEADER, label))
+
+    def emit(label: str, items: list[Task], *, show_empty: bool) -> None:
+        if not items and not show_empty:
+            return
+        rows.append((ROW_HEADER, f"{label} ({len(items)})"))
         if not items:
             rows.append((ROW_EMPTY, None))
-            continue
+            return
         for t in items:
             rows.append((ROW_TASK, t))
+
+    emit(ACTIVE, groups[ACTIVE], show_empty=True)  # type: ignore[arg-type]
+    emit(STAGING, groups[STAGING], show_empty=True)  # type: ignore[arg-type]
+    # One header per non-repo TODO keyword, sorted alphabetically.
+    # Empty buckets are not emitted — a bucket only exists if it has
+    # entries, so this just walks the discovered keywords in order.
+    todo_sections: dict[str, list[Task]] = groups[TODO]  # type: ignore[assignment]
+    for label in sorted(todo_sections):
+        emit(label, todo_sections[label], show_empty=False)
+    emit(RECENT, groups[RECENT], show_empty=True)  # type: ignore[arg-type]
     return rows
 
 
