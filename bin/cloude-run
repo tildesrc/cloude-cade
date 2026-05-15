@@ -126,7 +126,14 @@ fi
 # own task file" rule becomes a soft (CLAUDE.md-enforced) rule rather
 # than a physical (mount-enforced) one. $CLOUDE_TASK_FILE tells the
 # agent which one is theirs.
+# Pin DNS to public resolvers. Docker normally copies the host's
+# /etc/resolv.conf at container-create time, but that file picks up
+# whatever nameserver the host had when the container started -
+# including transient VPN nameservers that go unreachable once the
+# VPN drops. Hard-coding 1.1.1.1 / 8.8.8.8 here keeps containers
+# resolving regardless of the host's current VPN state.
 exec docker run --rm -it --privileged \
+    --dns 1.1.1.1 --dns 8.8.8.8 \
     -v cloude-claude-creds:/persist \
     -v "$DIND_VOLUME":/var/lib/docker \
     -v "$CLOUDE":"$CLOUDE":ro \
