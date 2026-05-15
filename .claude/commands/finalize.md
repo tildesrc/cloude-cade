@@ -114,39 +114,21 @@ git -C <source-clone> branch -D <BRANCH>
 
 ## 10. Move the file in the cloude repo
 
+Task `.org` files are gitignored (each user's task history is local), so a plain `mv` is sufficient — no `git mv`, no commit.
+
 For COMPLETE:
 
 ```
-git -C <cloude-root> mv tasks/active/<filename>.org tasks/completed/<filename>.org
+mv <cloude-root>/tasks/active/<filename>.org <cloude-root>/tasks/completed/<filename>.org
 ```
 
 For DROPPED:
 
 ```
-git -C <cloude-root> mv tasks/active/<filename>.org tasks/dropped/<filename>.org
+mv <cloude-root>/tasks/active/<filename>.org <cloude-root>/tasks/dropped/<filename>.org
 ```
 
-`git mv` stages the rename automatically.
-
-## 11. Commit the finalize in the cloude repo
-
-For COMPLETE:
-
-```
-git -C <cloude-root> commit -m "Complete: <heading text>" \
-    -- tasks/active/<filename>.org tasks/completed/<filename>.org
-```
-
-For DROPPED:
-
-```
-git -C <cloude-root> commit -m "Drop: <heading text>" \
-    -- tasks/active/<filename>.org tasks/dropped/<filename>.org
-```
-
-Pass the two paths as explicit arguments after `--` so the commit only includes the rename, not any other staged work.
-
-## 12. Report
+## 11. Report
 
 Summarize what was done:
 
@@ -157,4 +139,3 @@ Summarize what was done:
 - DinD volume `cloude-dind-<slug>`: removed (or "did not exist")
 - Local branch `<BRANCH>`: deleted (COMPLETE) or preserved (DROPPED)
 - PR `<pr-url>`: confirmed MERGED (COMPLETE) or closed (DROPPED)
-- Cloude commit: `<short-sha> <commit-message>`

@@ -21,3 +21,13 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# User-specific task data — captured per-machine, not part of the repo.
+/tasks/staging.org
+/tasks/active/*.org
+/tasks/completed/*.org
+/tasks/dropped/*.org
+
+# Project-specific pre-launch hooks — each user adds their own.
+/repo-hooks/*
+!/repo-hooks/.gitkeep

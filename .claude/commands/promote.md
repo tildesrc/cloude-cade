@@ -155,19 +155,9 @@ If the staging entry had body content, move it into the `Notes` section. Leave `
 
 Delete the chosen idea sub-heading and its body from `tasks/staging.org`. Leave the project heading in place even if no ideas remain under it.
 
-## 9. Commit the promotion in the cloude repo
+`tasks/staging.org` and the new `tasks/active/<...>.org` are both gitignored (task tracking is local-per-user), so there's no commit step — the edits just live in the working tree.
 
-Stage the new active task file and the staging.org edit, then commit. Don't use `git add -A` — stage these two paths by name to avoid sweeping in any unrelated work:
-
-```
-git -C <cloude-root> add tasks/staging.org tasks/active/<YYYY-MM-DD>-<slug>.org
-git -C <cloude-root> commit -m "Promote: <heading text>"      # standard
-git -C <cloude-root> commit -m "Adopt: <pr-title> (#<pr-number>)"   # ADOPT
-```
-
-If `git status` shows nothing to commit, skip this step.
-
-## 10. Create the tmux session and launch the container
+## 9. Create the tmux session and launch the container
 
 Create a detached tmux session that runs `bin/cloude-run` in the worktree:
 
@@ -180,7 +170,7 @@ The trailing `exec bash` keeps the pane alive after the container exits.
 
 If a session named `cloude-<slug>` already exists, stop and ask the user how to proceed (kill the existing one, rename, or abort).
 
-## 11. Report
+## 10. Report
 
 Summarize what was done. Standard mode:
 
