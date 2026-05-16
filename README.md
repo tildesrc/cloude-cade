@@ -116,9 +116,15 @@ and clean them up when they land.
 The yellow dashboard rows are the point — the tasks that need feedback
 right now (a planning prompt, a plan to approve, a decision). Highlight
 one and press `t` to drop straight into that task, give the agent what
-it needs, then return to the dashboard and move to the next yellow row.
-You monitor from the host side and dip into a task only where attention
-is wanted, so background work stays in the background.
+it needs, then jump back to the dashboard and move to the next yellow
+row. You monitor from the host side and dip into a task only where
+attention is wanted, so background work stays in the background.
+
+Run `bin/cloude-dash` itself inside a tmux session to make that jumping
+seamless: with the dashboard in tmux, `t` uses `tmux switch-client`
+(rather than `attach`), so flipping into a task's session — and back to
+the dashboard with tmux's own session-switch keys — is instant, with no
+detaching or reattaching.
 
 ```sh
 bin/cloude-dash    # p: open PR · t: switch to task · r: reload · q: quit
