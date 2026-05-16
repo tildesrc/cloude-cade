@@ -72,7 +72,7 @@ flowchart TD
     end
 
     STAGING -->|"/promote"| PLANNING
-    PLANNING -->|"plan approved (auto)"| ITERATING
+    PLANNING -->|"approved"| ITERATING
     ITERATING -->|"/advance"| REVIEW
     REVIEW -->|"/advance"| MERGING
     MERGING -->|"/babysit-merge"| COMPLETE
