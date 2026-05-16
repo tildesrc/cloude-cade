@@ -1,6 +1,6 @@
 # cloude
 
-Personal tools for parallelizing and managing development with Claude Code.
+Go from solo mode to YOLO mode.
 
 ## What this is for
 
