@@ -122,8 +122,9 @@ attention is wanted, so background work stays in the background.
 
 Run `bin/cloude-dash` itself inside a tmux session to make that jumping
 seamless: with the dashboard in tmux, `t` uses `tmux switch-client`
-(rather than `attach`), so flipping into a task's session — and back to
-the dashboard with tmux's own session-switch keys — is instant, with no
+(rather than `attach`), so flipping into a task's session is instant.
+To jump back, use tmux's default "switch to last session" binding —
+`Ctrl-b L` — which lands you straight on the dashboard, with no
 detaching or reattaching.
 
 ```sh
