@@ -81,7 +81,7 @@ flowchart TD
     REVIEW -.->|"/iterate"| ITERATING
     MERGING -.->|"/iterate"| ITERATING
     ITERATING -.->|"/drop"| DROPPED
-    DROPPED -.->|"/finalize"| CLEANUP
+    DROPPED -.->|"/sweep"| CLEANUP
 ```
 
 Solid arrows are the happy path; dashed arrows are the escape hatches
@@ -90,8 +90,7 @@ from the **host side** — capturing ideas, promoting, and cleaning
 up — while each task's agent runs in its **own container and tmux
 session**. Forward
 transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
-only `MERGING → COMPLETE` advances on its own. Many tasks run this
-lifecycle concurrently — each in its own container, fully independent.
+only `MERGING → COMPLETE` advances on its own.
 
 ### The host side
 
@@ -157,24 +156,6 @@ See [Dashboard](#dashboard) for the full key list.
 6. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
    `/finalize` moves the file to `tasks/completed/` and tears down the
    worktree, tmux session, and branch.
-
-### Running many at once
-
-The walkthrough above is one task, but cloude exists to keep many in
-flight. Steps **1–2** are independent per task — promote as many as you
-like; each gets its own container, branch, and agent, with nothing
-forcing you to finish one before starting the next.
-
-The leverage is in **steps 4–5**: once a task is in `ITERATING` or
-`MERGING`, its agent works unattended — `/babysit-ci` watching CI,
-`/babysit-merge` driving the merge queue — so every in-flight task makes
-progress *at the same time*, with no input from you.
-
-The only serial resource is your attention: the planning prompts and
-plan approvals of **step 3** and the `/advance` calls in **step 4**.
-Watch the dashboard's yellow rows, handle each task that needs you, and
-let the green ones keep running. **Step 6** is batched too — one `/sweep`
-pass retires every finished task at once.
 
 ### Where to go next
 
