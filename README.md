@@ -79,8 +79,7 @@ flowchart TD
 
     REVIEW -.->|"/iterate — review comments"| ITERATING
     MERGING -.->|"/iterate — merge broke"| ITERATING
-    PLANNING -.->|"/drop"| DROPPED["DROPPED"]
-    ITERATING -.->|"/drop"| DROPPED
+    ITERATING -.->|"/drop"| DROPPED["DROPPED"]
     DROPPED -.->|"/finalize"| CLEANUP
 ```
 
