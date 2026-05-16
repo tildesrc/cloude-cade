@@ -56,7 +56,7 @@ restart, so you won't need to log in again.
 
 ```mermaid
 flowchart TD
-    subgraph host["🖥️  Control hub"]
+    subgraph host["🖥️  Host side"]
         STAGING["tasks/staging.org<br/>captured ideas"]
         CLEANUP["/sweep → /finalize<br/>move file to completed/, tear down worktree"]
     end
@@ -86,17 +86,16 @@ flowchart TD
 
 Solid arrows are the happy path; dashed arrows are the escape hatches
 (`/iterate` back a stage, `/drop` to abandon). Note the split: you work
-from the **control hub** — capturing ideas, promoting, and cleaning
+from the **host side** — capturing ideas, promoting, and cleaning
 up — while each task's agent runs in its **own container and tmux
 session**. Forward
 transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
 only `MERGING → COMPLETE` advances on its own.
 
-### Your control hub
+### The host side
 
-The *control hub* is the host side of cloude — where you coordinate the
-per-task containers without writing any task code yourself. It is three
-things you keep open:
+The *host side* is where you coordinate the per-task containers without
+writing any task code yourself. It is three things you keep open:
 
 - **An editor on `tasks/staging.org`** (Emacs — the task files are
   org-mode). This is where you capture ideas as they come up, as
@@ -110,7 +109,7 @@ things you keep open:
   `:blocked:` (waiting on something external).
 
 The work itself happens elsewhere — every task `/promote` creates runs
-in its own container with its own Claude agent. The control hub is
+in its own container with its own Claude agent. The host side is
 mission control: capture and start tasks, monitor the in-flight ones,
 and clean them up when they land.
 
@@ -118,8 +117,8 @@ The yellow dashboard rows are the point — the tasks that need feedback
 right now (a planning prompt, a plan to approve, a decision). Highlight
 one and press `t` to drop straight into that task, give the agent what
 it needs, then return to the dashboard and move to the next yellow row.
-You monitor from the hub and dip into a task only where attention is
-wanted, so background work stays in the background.
+You monitor from the host side and dip into a task only where attention
+is wanted, so background work stays in the background.
 
 ```sh
 bin/cloude-dash    # p: open PR · t: switch to task · r: reload · q: quit
