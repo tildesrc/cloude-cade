@@ -56,7 +56,7 @@ tasks/
 | State        | Meaning                                                                      | Can move to                  |
 | ------------ | ---------------------------------------------------------------------------- | ---------------------------- |
 | `PLANNING`   | Claude is planning the work.                                                  | `ITERATING`, `DROPPED`       |
-| `ITERATING`  | Claude is writing code, running tests, updating the PR, waiting on CI.        | `REVIEW`, `DROPPED`          |
+| `ITERATING`  | Claude is writing code, running tests, updating the PR title/description, waiting on CI. | `REVIEW`, `DROPPED`          |
 | `REVIEW`     | PR is open for peer review, waiting on comments.                              | `ITERATING`, `MERGING`, `DROPPED` |
 | `MERGING`    | PR is approved and ready to merge.                                            | `COMPLETE`, `DROPPED`        |
 | `COMPLETE`   | PR is merged. Terminal.                                                       | —                            |

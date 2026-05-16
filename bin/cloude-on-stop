@@ -49,6 +49,7 @@ DOD = {
         "New and relevant tests pass locally.",
         "Changes are committed and pushed.",
         "CI tests are passing, or any failures can be attributed to irrelevant flakes.",
+        "The PR title and description on GitHub reflect the final change (not the draft-PR placeholder).",
     ],
     "REVIEW": [
         "The PR has been reviewed.",
