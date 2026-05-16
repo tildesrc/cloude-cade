@@ -70,15 +70,15 @@ flowchart TD
         COMPLETE["COMPLETE — PR merged"]
     end
 
-    STAGING -->|"/promote — branch + worktree + draft PR + tmux"| PLANNING
+    STAGING -->|"/promote"| PLANNING
     PLANNING -->|"plan approved (auto)"| ITERATING
-    ITERATING -->|"/advance — user-driven"| REVIEW
-    REVIEW -->|"/advance — user-driven"| MERGING
-    MERGING -->|"/babysit-merge auto-advances on merge"| COMPLETE
-    COMPLETE -->|"surfaced by /sweep"| CLEANUP
+    ITERATING -->|"/advance"| REVIEW
+    REVIEW -->|"/advance"| MERGING
+    MERGING -->|"/babysit-merge"| COMPLETE
+    COMPLETE -->|"/sweep"| CLEANUP
 
-    REVIEW -.->|"/iterate — review comments"| ITERATING
-    MERGING -.->|"/iterate — merge broke"| ITERATING
+    REVIEW -.->|"/iterate"| ITERATING
+    MERGING -.->|"/iterate"| ITERATING
     ITERATING -.->|"/drop"| DROPPED["DROPPED"]
     DROPPED -.->|"/finalize"| CLEANUP
 ```
