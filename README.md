@@ -92,30 +92,6 @@ session**. Forward
 transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
 only `MERGING → COMPLETE` advances on its own.
 
-### Your first task
-
-1. **Capture the idea.** Add a sub-heading under a project in
-   `tasks/staging.org`. The project's top-level heading needs a `:REPO:`
-   property pointing at its GitHub repo (see [staging.org
-   structure](#stagingorg-structure)).
-2. **Promote it.** Run `/promote` from your host Claude session. It
-   creates the active task file, a `cloude/<slug>` branch, a worktree, a
-   draft PR, and a detached `cloude-<slug>` tmux session. The task starts
-   in `PLANNING :user:` — waiting for you.
-3. **Plan.** Attach to the task's tmux session (`tmux attach -t
-   cloude-<slug>`, or press `t` on the dashboard) and give the agent a
-   planning prompt. When you approve its plan, a hook flips the task to
-   `ITERATING` automatically.
-4. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
-   watches CI after each push. When a stage's work is done the agent
-   flips its tag to `:user:` — that's your cue to run `/advance` to move
-   `ITERATING → REVIEW → MERGING`.
-5. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
-   auto-advances the task to `COMPLETE` once the PR lands.
-6. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
-   `/finalize` moves the file to `tasks/completed/` and tears down the
-   worktree, tmux session, and branch.
-
 ### Your control hub
 
 You run cloude from a single long-lived tmux session — your *control
@@ -148,6 +124,30 @@ bin/cloude-dash    # p: open PR · t: switch to task tmux · r: reload · q: qui
 ```
 
 See [Dashboard](#dashboard) for the full key list.
+
+### Your first task
+
+1. **Capture the idea.** Add a sub-heading under a project in
+   `tasks/staging.org`. The project's top-level heading needs a `:REPO:`
+   property pointing at its GitHub repo (see [staging.org
+   structure](#stagingorg-structure)).
+2. **Promote it.** Run `/promote` from your host Claude session. It
+   creates the active task file, a `cloude/<slug>` branch, a worktree, a
+   draft PR, and a detached `cloude-<slug>` tmux session. The task starts
+   in `PLANNING :user:` — waiting for you.
+3. **Plan.** Attach to the task's tmux session (`tmux attach -t
+   cloude-<slug>`, or press `t` on the dashboard) and give the agent a
+   planning prompt. When you approve its plan, a hook flips the task to
+   `ITERATING` automatically.
+4. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
+   watches CI after each push. When a stage's work is done the agent
+   flips its tag to `:user:` — that's your cue to run `/advance` to move
+   `ITERATING → REVIEW → MERGING`.
+5. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
+   auto-advances the task to `COMPLETE` once the PR lands.
+6. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
+   `/finalize` moves the file to `tasks/completed/` and tears down the
+   worktree, tmux session, and branch.
 
 ### Where to go next
 
