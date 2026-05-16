@@ -68,6 +68,7 @@ flowchart TD
         REVIEW["REVIEW<br/>waiting on peer review"]
         MERGING["MERGING<br/>/babysit-merge drives merge queue"]
         COMPLETE["COMPLETE — PR merged"]
+        DROPPED["DROPPED — task abandoned"]
     end
 
     STAGING -->|"/promote"| PLANNING
@@ -79,7 +80,7 @@ flowchart TD
 
     REVIEW -.->|"/iterate"| ITERATING
     MERGING -.->|"/iterate"| ITERATING
-    ITERATING -.->|"/drop"| DROPPED["DROPPED"]
+    ITERATING -.->|"/drop"| DROPPED
     DROPPED -.->|"/finalize"| CLEANUP
 ```
 
