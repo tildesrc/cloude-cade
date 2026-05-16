@@ -11,7 +11,7 @@ Beyond the mechanical overhead of running Claude Code (worktrees, branches,
 PR triage, scheduled jobs, etc.), the larger goal is to manage the
 *workflow* of development tasks from beginning to end. Agents change the
 shape of that workflow: they enable — and require — far more multitasking
-than solo development, with several pieces of work in flight at once and
+than unassisted development, with several pieces of work in flight at once and
 agents running unattended in the background.
 
 That makes it essential to have a well-defined workflow that distinguishes:
