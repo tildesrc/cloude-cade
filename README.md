@@ -113,6 +113,26 @@ in its own container with its own Claude agent. The host side is
 mission control: capture and start tasks, monitor the in-flight ones,
 and clean them up when they land.
 
+Here it is on a typical day — every task on one screen, ranked by
+stage, each tagged with who currently has the ball (the `:agent:` /
+`:user:` / `:blocked:` tags are colour-coded green / yellow / red):
+
+```text
+cloude tasks                 ↑/↓ move  p open PR  t tmux  r reload  q quit
+
+ACTIVE (4)
+  MERGING   :agent:    Cache the dashboard customer lookup         PR #312
+  REVIEW    :blocked:  Add rate-limit headers to the API           PR #305
+> ITERATING :user:     Create a quickstart guide for cloude        PR #298
+  PLANNING  :user:     Migrate the billing cron job                PR #314
+STAGING (2)
+  —                    Retry webhook deliveries with backoff
+  —                    Drop the legacy /v1 search endpoint
+RECENT (2)
+  COMPLETE  2026-05-14  fix-flaky-auth-retry-test
+  DROPPED   2026-05-12  prototype-graphql-gateway
+```
+
 The yellow dashboard rows are the point — the tasks that need feedback
 right now (a planning prompt, a plan to approve, a decision). Highlight
 one and press `t` to drop straight into that task, give the agent what
