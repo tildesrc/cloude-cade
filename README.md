@@ -58,7 +58,6 @@ restart, so you won't need to log in again.
 flowchart TD
     subgraph host["🖥️  Host"]
         STAGING["tasks/staging.org<br/>captured ideas"]
-        DASH["bin/cloude-dash<br/>dashboard TUI — watch all tasks"]
         CLEANUP["/sweep → /finalize<br/>move file to completed/, tear down worktree"]
     end
 
@@ -83,8 +82,6 @@ flowchart TD
     PLANNING -.->|"/drop"| DROPPED["DROPPED"]
     ITERATING -.->|"/drop"| DROPPED
     DROPPED -.->|"/finalize"| CLEANUP
-
-    DASH -.->|"reads every tasks/**/*.org"| container
 ```
 
 Solid arrows are the happy path; dashed arrows are the escape hatches
@@ -118,15 +115,29 @@ only `MERGING → COMPLETE` advances on its own.
    `/finalize` moves the file to `tasks/completed/` and tears down the
    worktree, tmux session, and branch.
 
-### Watch everything
+### The dashboard is your hub
 
 ```sh
 bin/cloude-dash
 ```
 
-`bin/cloude-dash` is a TUI showing every task and who currently has the
-ball. Press `p` to open the highlighted task's PR, `t` to switch to its
-tmux session, `q` to quit. See [Dashboard](#dashboard) for all keys.
+With several tasks in flight at once — each agent working away in its
+own container — you need one place to watch from. `bin/cloude-dash` is
+that hub: a TUI listing every task with its stage and a colour-coded
+who-has-the-ball tag — green `:agent:` (running on its own), yellow
+`:user:` (waiting on you), red `:blocked:` (waiting on something
+external).
+
+The yellow rows are the point. They are the tasks that need feedback
+right now — a planning prompt, a plan to approve, a decision. Highlight
+one, press `t` to jump straight into its tmux session, give the agent
+what it needs, then come back to the dashboard and press `t` on the
+next yellow row. You watch from the hub and dip in and out of the tmux
+sessions only where attention is actually wanted, so background work
+stays in the background.
+
+Press `p` to open the highlighted task's PR, `r` to reload, `q` to
+quit. See [Dashboard](#dashboard) for the full key list.
 
 ### Where to go next
 
