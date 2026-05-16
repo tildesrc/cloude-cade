@@ -24,6 +24,119 @@ That makes it essential to have a well-defined workflow that distinguishes:
 The tools in this repo exist to make that distinction explicit and to keep
 the right things flowing through the right lane.
 
+## Quickstart
+
+New to cloude? This section is the fast path — prerequisites, one-time
+setup, the workflow at a glance, and one task taken from idea to merged
+PR. The sections below it are the full reference.
+
+### Prerequisites
+
+- **Docker**, with the daemon running — every task's agent runs in a
+  sandboxed container.
+- **[`uv`](https://docs.astral.sh/uv/)** — runs the PEP 723 scripts
+  (`bin/cloude-dash` and the org-file helpers) with their dependencies
+  handled transparently.
+- **`gh`**, authenticated (`gh auth login`) — used to open and manage PRs.
+- **`git`**.
+- **Claude Code** — the `claude` CLI.
+
+### One-time setup
+
+```sh
+make build       # build the container image (a few minutes the first time)
+make login       # interactive claude login — do this once per workstation
+```
+
+After `make login` exits, your Claude credentials live in the
+`cloude-claude-creds` Docker volume and persist across every task and
+restart, so you won't need to log in again.
+
+### The workflow at a glance
+
+```mermaid
+flowchart TD
+    subgraph host["🖥️  Host"]
+        STAGING["tasks/staging.org<br/>captured ideas"]
+        DASH["bin/cloude-dash<br/>dashboard TUI — watch all tasks"]
+        CLEANUP["/sweep → /finalize<br/>move file to completed/, tear down worktree"]
+    end
+
+    subgraph container["📦  Docker container — one per task, own tmux session"]
+        direction TB
+        PLANNING["PLANNING<br/>agent plans, user approves"]
+        ITERATING["ITERATING<br/>agent codes, /babysit-ci watches CI"]
+        REVIEW["REVIEW<br/>waiting on peer review"]
+        MERGING["MERGING<br/>/babysit-merge drives merge queue"]
+        COMPLETE["COMPLETE — PR merged"]
+    end
+
+    STAGING -->|"/promote — branch + worktree + draft PR + tmux"| PLANNING
+    PLANNING -->|"plan approved (auto)"| ITERATING
+    ITERATING -->|"/advance — user-driven"| REVIEW
+    REVIEW -->|"/advance — user-driven"| MERGING
+    MERGING -->|"/babysit-merge auto-advances on merge"| COMPLETE
+    COMPLETE -->|"surfaced by /sweep"| CLEANUP
+
+    REVIEW -.->|"/iterate — review comments"| ITERATING
+    MERGING -.->|"/iterate — merge broke"| ITERATING
+    PLANNING -.->|"/drop"| DROPPED["DROPPED"]
+    ITERATING -.->|"/drop"| DROPPED
+    DROPPED -.->|"/finalize"| CLEANUP
+
+    DASH -.->|"reads every tasks/**/*.org"| container
+```
+
+Solid arrows are the happy path; dashed arrows are the escape hatches
+(`/iterate` back a stage, `/drop` to abandon). Note the split: you work
+on the **host** — capturing ideas, promoting, and cleaning up — while
+each task's agent runs in its **own container and tmux session**. Forward
+transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
+only `MERGING → COMPLETE` advances on its own.
+
+### Your first task
+
+1. **Capture the idea.** Add a sub-heading under a project in
+   `tasks/staging.org`. The project's top-level heading needs a `:REPO:`
+   property pointing at its GitHub repo (see [staging.org
+   structure](#stagingorg-structure)).
+2. **Promote it.** Run `/promote` in Claude Code on the host. It creates
+   the active task file, a `cloude/<slug>` branch, a worktree, a draft
+   PR, and a detached `cloude-<slug>` tmux session. The task starts in
+   `PLANNING :user:` — waiting for you.
+3. **Plan.** Attach to the task's tmux session (`tmux attach -t
+   cloude-<slug>`, or press `t` on the dashboard) and give the agent a
+   planning prompt. When you approve its plan, a hook flips the task to
+   `ITERATING` automatically.
+4. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
+   watches CI after each push. When a stage's work is done the agent
+   flips its tag to `:user:` — that's your cue to run `/advance` to move
+   `ITERATING → REVIEW → MERGING`.
+5. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
+   auto-advances the task to `COMPLETE` once the PR lands.
+6. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
+   `/finalize` moves the file to `tasks/completed/` and tears down the
+   worktree, tmux session, and branch.
+
+### Watch everything
+
+```sh
+bin/cloude-dash
+```
+
+`bin/cloude-dash` is a TUI showing every task and who currently has the
+ball. Press `p` to open the highlighted task's PR, `t` to switch to its
+tmux session, `q` to quit. See [Dashboard](#dashboard) for all keys.
+
+### Where to go next
+
+- [Workflow states](#workflow-states) — what each TODO keyword means.
+- [Lifecycle](#lifecycle) — the same path, in reference form.
+- [Slash commands](#slash-commands) — full detail on `/promote`,
+  `/advance`, `/babysit-ci`, `/finalize`, and the rest.
+- [Running tasks in Docker](#running-tasks-in-docker) — how the
+  per-task container is wired up.
+
 ## Task tracking
 
 Each chunk of work — its current state and full history — is tracked in an
