@@ -104,9 +104,9 @@ writing any task code yourself. It is three things you keep open:
   *start* and *retire* tasks: `/promote` to spin one up, `/sweep` and
   `/finalize` to clean it up once it's merged.
 - **The dashboard**, `bin/cloude-dash` — a TUI listing every task with
-  its stage and a colour-coded who-has-the-ball tag: green `:agent:`
-  (running on its own), yellow `:user:` (waiting on you), red
-  `:blocked:` (waiting on something external).
+  its stage and a who-has-the-ball tag: `:agent:` (running on its own),
+  `:user:` (waiting on you), or `:blocked:` (waiting on something
+  external).
 
 The work itself happens elsewhere — every task `/promote` creates runs
 in its own container with its own Claude agent. The host side is
@@ -114,8 +114,8 @@ mission control: capture and start tasks, monitor the in-flight ones,
 and clean them up when they land.
 
 Here it is on a typical day — every task on one screen, ranked by
-stage, each tagged with who currently has the ball (the `:agent:` /
-`:user:` / `:blocked:` tags are colour-coded green / yellow / red):
+stage, each tagged with who currently has the ball — `:agent:`,
+`:user:`, or `:blocked:` (the live TUI colour-codes the tag too):
 
 ```text
 cloude tasks                 ↑/↓ move  p open PR  t tmux  r reload  q quit
@@ -133,10 +133,10 @@ RECENT (2)
   DROPPED   2026-05-12  prototype-graphql-gateway
 ```
 
-The yellow dashboard rows are the point — the tasks that need feedback
-right now (a planning prompt, a plan to approve, a decision). Highlight
-one and press `t` to drop straight into that task, give the agent what
-it needs, then jump back to the dashboard and move to the next yellow
+The `:user:` rows are the point — the tasks that need feedback right
+now (a planning prompt, a plan to approve, a decision). Highlight one
+and press `t` to drop straight into that task, give the agent what it
+needs, then jump back to the dashboard and move to the next `:user:`
 row. You monitor from the host side and dip into a task only where
 attention is wanted, so background work stays in the background.
 
