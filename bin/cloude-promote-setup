@@ -203,6 +203,15 @@ if [[ "$MODE" == "standard" ]]; then
         bail 11 "git worktree add $BRANCH failed"
     fi
     record "Worktree + branch '$BRANCH' off origin/$DEFAULT_BRANCH"
+    # Seed the branch with an empty commit. Without at least one commit
+    # ahead of the base, `gh pr create` fails with "No commits between
+    # <base> and <branch>".
+    if ! git -C "$WORKTREE" commit --allow-empty \
+            -m "Seed branch for task $(basename "$TASK_FILE" .org)" \
+            >/dev/null 2>&1; then
+        bail 11 "git commit --allow-empty failed"
+    fi
+    record "Seeded $BRANCH with an empty commit"
     if ! git -C "$WORKTREE" push -u origin "$BRANCH" >/dev/null 2>&1; then
         bail 11 "git push -u origin $BRANCH failed"
     fi
