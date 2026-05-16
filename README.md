@@ -94,33 +94,35 @@ only `MERGING → COMPLETE` advances on its own.
 
 ### Your control hub
 
-You run cloude from a single long-lived tmux session — your *control
-hub* — split into two panes:
+The *control hub* is the host side of cloude — where you coordinate the
+per-task containers without writing any task code yourself. It is three
+things you keep open:
 
+- **An editor on `tasks/staging.org`** (Emacs — the task files are
+  org-mode). This is where you capture ideas as they come up, as
+  sub-headings under their project, ready to `/promote` later.
 - **A host Claude session** in the cloude repo. This is where you
   *start* and *retire* tasks: `/promote` to spin one up, `/sweep` and
-  `/finalize` to clean it up once it's merged. It never writes task
-  code itself.
+  `/finalize` to clean it up once it's merged.
 - **The dashboard**, `bin/cloude-dash` — a TUI listing every task with
   its stage and a colour-coded who-has-the-ball tag: green `:agent:`
   (running on its own), yellow `:user:` (waiting on you), red
   `:blocked:` (waiting on something external).
 
-The work itself happens elsewhere — every task `/promote` creates gets
-its own container and tmux session with its own Claude agent. The
-control hub is mission control: you start and clean up tasks in the
-host pane, and monitor all the in-flight ones from the dashboard pane.
+The work itself happens elsewhere — every task `/promote` creates runs
+in its own container with its own Claude agent. The control hub is
+mission control: capture and start tasks, monitor the in-flight ones,
+and clean them up when they land.
 
 The yellow dashboard rows are the point — the tasks that need feedback
 right now (a planning prompt, a plan to approve, a decision). Highlight
-one, press `t` to jump straight into its tmux session, give the agent
-what it needs, then return to the dashboard and press `t` on the next
-yellow row. You monitor from the hub and dip into the task sessions
-only where attention is wanted, so background work stays in the
-background.
+one and press `t` to drop straight into that task, give the agent what
+it needs, then return to the dashboard and move to the next yellow row.
+You monitor from the hub and dip into a task only where attention is
+wanted, so background work stays in the background.
 
 ```sh
-bin/cloude-dash    # p: open PR · t: switch to task tmux · r: reload · q: quit
+bin/cloude-dash    # p: open PR · t: switch to task · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
