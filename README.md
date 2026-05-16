@@ -56,7 +56,7 @@ restart, so you won't need to log in again.
 
 ```mermaid
 flowchart TD
-    subgraph host["🖥️  Host"]
+    subgraph host["🖥️  Control hub"]
         STAGING["tasks/staging.org<br/>captured ideas"]
         CLEANUP["/sweep → /finalize<br/>move file to completed/, tear down worktree"]
     end
@@ -86,8 +86,9 @@ flowchart TD
 
 Solid arrows are the happy path; dashed arrows are the escape hatches
 (`/iterate` back a stage, `/drop` to abandon). Note the split: you work
-on the **host** — capturing ideas, promoting, and cleaning up — while
-each task's agent runs in its **own container and tmux session**. Forward
+from the **control hub** — capturing ideas, promoting, and cleaning
+up — while each task's agent runs in its **own container and tmux
+session**. Forward
 transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
 only `MERGING → COMPLETE` advances on its own.
 
@@ -97,10 +98,10 @@ only `MERGING → COMPLETE` advances on its own.
    `tasks/staging.org`. The project's top-level heading needs a `:REPO:`
    property pointing at its GitHub repo (see [staging.org
    structure](#stagingorg-structure)).
-2. **Promote it.** Run `/promote` in Claude Code on the host. It creates
-   the active task file, a `cloude/<slug>` branch, a worktree, a draft
-   PR, and a detached `cloude-<slug>` tmux session. The task starts in
-   `PLANNING :user:` — waiting for you.
+2. **Promote it.** Run `/promote` from your host Claude session. It
+   creates the active task file, a `cloude/<slug>` branch, a worktree, a
+   draft PR, and a detached `cloude-<slug>` tmux session. The task starts
+   in `PLANNING :user:` — waiting for you.
 3. **Plan.** Attach to the task's tmux session (`tmux attach -t
    cloude-<slug>`, or press `t` on the dashboard) and give the agent a
    planning prompt. When you approve its plan, a hook flips the task to
@@ -115,29 +116,38 @@ only `MERGING → COMPLETE` advances on its own.
    `/finalize` moves the file to `tasks/completed/` and tears down the
    worktree, tmux session, and branch.
 
-### The dashboard is your hub
+### Your control hub
+
+You run cloude from a single long-lived tmux session — your *control
+hub* — split into two panes:
+
+- **A host Claude session** in the cloude repo. This is where you
+  *start* and *retire* tasks: `/promote` to spin one up, `/sweep` and
+  `/finalize` to clean it up once it's merged. It never writes task
+  code itself.
+- **The dashboard**, `bin/cloude-dash` — a TUI listing every task with
+  its stage and a colour-coded who-has-the-ball tag: green `:agent:`
+  (running on its own), yellow `:user:` (waiting on you), red
+  `:blocked:` (waiting on something external).
+
+The work itself happens elsewhere — every task `/promote` creates gets
+its own container and tmux session with its own Claude agent. The
+control hub is mission control: you start and clean up tasks in the
+host pane, and monitor all the in-flight ones from the dashboard pane.
+
+The yellow dashboard rows are the point — the tasks that need feedback
+right now (a planning prompt, a plan to approve, a decision). Highlight
+one, press `t` to jump straight into its tmux session, give the agent
+what it needs, then return to the dashboard and press `t` on the next
+yellow row. You monitor from the hub and dip into the task sessions
+only where attention is wanted, so background work stays in the
+background.
 
 ```sh
-bin/cloude-dash
+bin/cloude-dash    # p: open PR · t: switch to task tmux · r: reload · q: quit
 ```
 
-With several tasks in flight at once — each agent working away in its
-own container — you need one place to watch from. `bin/cloude-dash` is
-that hub: a TUI listing every task with its stage and a colour-coded
-who-has-the-ball tag — green `:agent:` (running on its own), yellow
-`:user:` (waiting on you), red `:blocked:` (waiting on something
-external).
-
-The yellow rows are the point. They are the tasks that need feedback
-right now — a planning prompt, a plan to approve, a decision. Highlight
-one, press `t` to jump straight into its tmux session, give the agent
-what it needs, then come back to the dashboard and press `t` on the
-next yellow row. You watch from the hub and dip in and out of the tmux
-sessions only where attention is actually wanted, so background work
-stays in the background.
-
-Press `p` to open the highlighted task's PR, `r` to reload, `q` to
-quit. See [Dashboard](#dashboard) for the full key list.
+See [Dashboard](#dashboard) for the full key list.
 
 ### Where to go next
 
