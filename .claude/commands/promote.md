@@ -33,15 +33,26 @@ TODO_PROJECTS  <count>
 
 Present the numbered `PROMOTABLE` lines to the user. If `TODO_PROJECTS` is non-zero, print one short note above the listing: `(<count> TODO-project ideas omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask which one to promote.
 
-To recover the staging context for the chosen number, re-read `tasks/staging.org` directly — you'll need the exact idea heading text (for `--staging-heading` and ADOPT-URL extraction) and the project's `:REPO:` property.
+Once the user picks a number `N`, recover that idea's full record — don't re-read `tasks/staging.org` by hand:
+
+```
+bin/cloude-list-staging --select <N>
+```
+
+`eval` its stdout — it emits shell-safe `KEY=VALUE` lines for the chosen index:
+
+- `REPO` — the project's `:REPO:` URL (→ `--repo-url`).
+- `HEADING` — the exact idea heading text (→ `--staging-heading`, and `--heading` in standard mode).
+- `MODE` — `standard` or `adopt` (see step 2).
+- `PR_URL` — the adopted PR URL in ADOPT mode, empty otherwise.
 
 If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 
 ## 2. Detect mode and (if ADOPT) gather PR details
 
-The `[ADOPT]` suffix in step 1's output is the mode marker. Equivalently: the idea heading text starts with `ADOPT `.
+`MODE` from step 1's `--select` output is the mode marker — `standard` or `adopt`. (The `[ADOPT]` suffix in the plain listing is the same signal, derived from the idea heading starting with `ADOPT `.)
 
-For ADOPT mode, extract the PR URL (everything after `ADOPT `) and query the PR:
+For ADOPT mode, the PR URL is `PR_URL` from step 1. Query the PR:
 
 ```
 gh pr view <pr-url> --json number,title,state,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository

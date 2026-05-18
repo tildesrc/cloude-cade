@@ -8,7 +8,7 @@ This is the agent-side half of the drop: after this skill flips the state, the h
 
 ## 1. Read the task file
 
-Read `$CLOUDE_TASK_FILE`. Parse the top-level heading's current TODO keyword, heading text, and existing tag(s).
+Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"`. The helper emits shell-safe `KEY=VALUE` lines; after `eval`, `$TODO` holds the current keyword (used by the guard below), `$TAG` the current tag, and `$PR` the PR URL (used in the report). Don't hand-parse the heading. If the command exits non-zero, surface its stderr and stop.
 
 ## 2. Guard against bad transitions
 
@@ -17,12 +17,13 @@ Read `$CLOUDE_TASK_FILE`. Parse the top-level heading's current TODO keyword, he
 
 ## 3. Perform the transition
 
-Edit the heading line:
+Flip the heading with the shared helper:
 
-- TODO keyword → `DROPPED`
-- Heading tag → `:user:` (the per-stage default for DROPPED — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed.
+```
+"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo DROPPED --tag <tag>
+```
 
-Strip any existing trailing `:tag:` markers before appending the new one. Preserve the heading text and leading indentation exactly. Don't touch anything below the heading.
+`<tag>` is `user` (the per-stage default for DROPPED — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed to `/drop`. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
 
 ## 4. Report
 

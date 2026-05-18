@@ -420,18 +420,27 @@ commands:
 
 ### Helper scripts in `bin/`
 
-`/promote`, `/sweep`, and `/finalize` are thin interactive wrappers
-around a small set of `bin/` orchestrators. Each script is callable
-by hand too (e.g. for scripting outside the skills, or when
-debugging). Scripts that read or edit `.org` files are Python with a
+`/promote`, `/sweep`, `/finalize`, and the in-container state-flip
+commands (`/advance`, `/iterate`, `/drop`, `/babysit-ci`,
+`/babysit-merge`) are thin wrappers around a small set of `bin/`
+orchestrators — the skills shell out to these instead of parsing or
+rewriting `.org` files themselves, so the structural reading and
+writing of org files lives in one place. Each script is callable by
+hand too (e.g. for scripting outside the skills, or when debugging).
+Scripts that *read* `.org` files parse them with `orgparse` via a
 PEP 723 inline-deps header (same pattern as `bin/cloude-dash`) and
 are intended to be run via `uv` — see the Dashboard section for the
-`orgparse` install story.
+`orgparse` install story. The one script that only *edits* a
+heading (`cloude-task-set-state`) uses a single regex, needs no
+dependency, and runs on plain `python3`.
 
 - **`cloude-list-staging`** — Print promotable ideas from
   `tasks/staging.org` numbered globally, plus a trailing
   `TODO_PROJECTS <n>` count of personal-TODO projects (no `:REPO:`)
-  that `/promote` skips. Used by `/promote` step 1.
+  that `/promote` skips. With `--select N`, instead emits the chosen
+  idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`) as
+  shell-safe `KEY=VALUE` lines, so `/promote` can `eval` it rather
+  than re-parsing staging.org. Used by `/promote` step 1.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -444,8 +453,20 @@ are intended to be run via `uv` — see the Dashboard section for the
   (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
   `COMPANION_PR` when present), and derived fields (`SLUG`,
   `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
-  `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup`. Exit 3
-  names the missing key when a required property is absent.
+  `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
+  `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
+  skills at their read-the-task-file step. Exit 3 names the missing
+  key when a required property is absent.
+- **`cloude-task-set-state <task-file> [--todo NAME] [--tag NAME]`** —
+  Rewrite the first heading of a task file in place: `--todo` swaps
+  the TODO keyword, `--tag` replaces the entire trailing tag chain
+  with one tag; an omitted flag leaves that part untouched. The
+  heading text and everything below are preserved. This is the one
+  place the task-heading edit is spelled out — the `/advance`,
+  `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge` skills and
+  `cloude-finalize-cleanup`'s force-drop all call it instead of
+  re-deriving the rewrite. Prints the resulting `TODO` / `TAG`.
+  Regex-based, no dependency, runs on plain `python3`.
 - **`cloude-promote-setup`** — Bash orchestrator for `/promote`
   steps 4-9: ensure source clone, create worktree + branch, push
   (standard) or fetch (ADOPT), open draft PR (standard only),

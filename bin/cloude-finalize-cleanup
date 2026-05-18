@@ -26,7 +26,7 @@
 #        Pass --skip-volume to leave it in place.
 #
 # Anything else is a hard failure: 20 (gh pr close), 21 (file move),
-# 22 (task-info), 30 (arg validation).
+# 22 (task-info), 23 (heading rewrite), 30 (arg validation).
 
 set -euo pipefail
 
@@ -86,9 +86,10 @@ if [[ -z "$TASK_FILE" || ! -f "$TASK_FILE" ]]; then
 fi
 TASK_FILE="$(cd "$(dirname "$TASK_FILE")" && pwd)/$(basename "$TASK_FILE")"
 
-# Resolve cloude-task-info from this script's directory (alongside us).
+# Resolve sibling helpers from this script's directory.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TASK_INFO="$SCRIPT_DIR/cloude-task-info"
+SET_STATE="$SCRIPT_DIR/cloude-task-set-state"
 if [[ ! -x "$TASK_INFO" ]]; then
     echo "ERROR: cloude-task-info not found alongside this script: $TASK_INFO" >&2
     exit 22
@@ -136,24 +137,17 @@ case "$TODO" in
             echo "       pass --force-drop to flip to DROPPED and proceed." >&2
             exit 11
         fi
-        # Flip the TODO keyword on the heading to DROPPED, in place.
-        # Use python (already a dependency via cloude-task-info) for
-        # a precise, atomic edit rather than sed.
-        python3 - "$TASK_FILE" "$TODO" <<'PY'
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-old_todo = sys.argv[2]
-text = path.read_text()
-# The top-level heading line starts with "* <TODO> ". Replace only the
-# first occurrence of the old keyword right after the leading "* ".
-needle = f"* {old_todo} "
-i = text.find(needle)
-if i == -1:
-    sys.exit(f"could not locate '* {old_todo} ' in {path}")
-text = text[:i] + "* DROPPED " + text[i + len(needle):]
-path.write_text(text)
-PY
+        # Flip the TODO keyword on the heading to DROPPED, in place,
+        # via the shared heading-rewriter (the org parsing lives there,
+        # not re-derived here). The tag is left as-is.
+        if [[ ! -x "$SET_STATE" ]]; then
+            echo "ERROR: cloude-task-set-state not found alongside this script: $SET_STATE" >&2
+            exit 23
+        fi
+        if ! "$SET_STATE" "$TASK_FILE" --todo DROPPED >/dev/null; then
+            echo "ERROR: failed to flip TODO keyword to DROPPED in $TASK_FILE" >&2
+            exit 23
+        fi
         TODO=DROPPED
         FORCED_DROP=true
         # Close the PR for the drop, same logic as the DROPPED branch.
