@@ -21,6 +21,7 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     import orgparse
@@ -172,22 +173,21 @@ def _load_staging(
 def _repo_path(url: str) -> str:
     """Reduce a repo URL/identifier to its 'owner/repo' path.
 
-    Handles the `https://github.com/owner/repo` and SSH
-    `git@github.com:owner/repo` forms, a trailing slash, and a `.git`
-    suffix. A bare `owner/repo` (no scheme/host) passes through.
-    Case is preserved — this feeds the human-facing fallback label.
+    The `https://github.com/owner/repo` form (and any other scheme) is
+    parsed with `urllib.parse.urlsplit`, which yields the host-less
+    path directly. The scp-like SSH form `git@github.com:owner/repo`
+    is not a real URL, so it is first promoted to an `ssh://` URL so
+    the same parser handles it. A trailing slash and a `.git` suffix
+    are trimmed; a bare `owner/repo` passes through. Case is preserved
+    — this feeds the human-facing fallback label.
     """
     s = url.strip()
-    if s.startswith("git@"):                       # git@github.com:owner/repo
-        s = s.split(":", 1)[-1]
-    elif "://" in s:                               # https://github.com/owner/repo
-        s = s.split("://", 1)[-1]                  # github.com/owner/repo
-        if "/" in s:
-            s = s.split("/", 1)[-1]                # owner/repo
-    s = s.rstrip("/")
-    if s.endswith(".git"):
-        s = s[:-4]
-    return s
+    if "://" not in s and "@" in s:
+        # scp-like SSH (git@host:owner/repo): promote to a proper
+        # ssh:// URL by turning the host/path ':' into a '/'.
+        s = "ssh://" + s.replace(":", "/", 1)
+    path = urlsplit(s).path.strip("/")
+    return path.removesuffix(".git")
 
 
 def _repo_key(url: str) -> str:
