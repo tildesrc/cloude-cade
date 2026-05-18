@@ -366,7 +366,10 @@ renders the following sections:
   Each row shows the TODO keyword, who currently has the ball
   (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading,
   then a right-aligned repo label and the PR number from the `:PR:`
-  property.
+  property. A task that has reached a terminal state
+  (`COMPLETE`/`DROPPED`) but is still awaiting host-side `/finalize`
+  shows no ball tag — the tag is only meaningful while a task is in
+  flight.
 - **STAGING** — idea sub-headings under top-level projects that have a
   `:REPO:` property (i.e. promotable via `/promote`).
 - **One section per TODO keyword** for idea sub-headings under
