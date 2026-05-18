@@ -118,7 +118,10 @@ is mechanical and won't enforce it.
   implementation.
 - Update the PR title and description on GitHub so they describe the
   change as implemented, replacing the placeholder text the draft PR
-  was opened with.
+  was opened with. The description should describe the change only —
+  do **not** include a "Test Plan", "Verification", or equivalent
+  test-steps section. Verification notes stay local: keep them in the
+  task's org file (`** Notes` / acceptance criteria), not on the PR.
 
 **Definition of done**
 - The plan is implemented in code.
@@ -128,7 +131,8 @@ is mechanical and won't enforce it.
 - CI tests are passing, or any failures can be attributed to
   irrelevant flakes.
 - The PR title and description on GitHub reflect the final change
-  (not the draft-PR placeholder).
+  (not the draft-PR placeholder), and the description carries no Test
+  Plan / Verification section.
 
 #### REVIEW
 
