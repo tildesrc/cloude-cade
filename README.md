@@ -126,10 +126,10 @@ labelled with the repo it belongs to:
 cloude tasks                 ↑/↓ move  p open PR  t tmux  r reload  q quit
 
 ACTIVE (4)
-  MERGING   :agent:    Cache the dashboard customer lookup Acme Webapp  PR #312
-  REVIEW    :blocked:  Add rate-limit headers to the API      Acme API  PR #305
-> ITERATING :user:     Create a quickstart guide for cloude     Cloude  PR #298
-  PLANNING  :user:     Migrate the billing cron job            Billing  PR #314
+  MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
+  REVIEW    :blocked:  Add rate-limit headers to the API      PR #305  Acme API
+> ITERATING :user:     Create a quickstart guide for cloude     PR #298  Cloude
+  PLANNING  :user:     Migrate the billing cron job            PR #314  Billing
 STAGING (2)
   —                    Retry webhook deliveries with backoff  Acme API
   —                    Drop the legacy /v1 search endpoint    Acme API
