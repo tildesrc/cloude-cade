@@ -40,8 +40,15 @@ import shlex
 import sys
 from pathlib import Path
 
-TODO_KEYWORDS = ("PLANNING", "ITERATING", "REVIEW", "MERGING", "COMPLETE", "DROPPED")
-BALL_TAGS = ("agent", "user", "blocked")
+# The valid TODO keywords and who-has-the-ball tags come from the
+# workflow definition (bin/cloude_workflow.py, a stdlib-only sibling)
+# rather than being hardcoded here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+_WORKFLOW = cloude_workflow.load()
+TODO_KEYWORDS = tuple(_WORKFLOW.state_names)
+BALL_TAGS = _WORKFLOW.ball_tag_names
 
 # The first heading of a task file: leading stars + space, a known
 # TODO keyword, optional heading text, an optional trailing :tag:chain:,

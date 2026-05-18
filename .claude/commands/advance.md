@@ -26,27 +26,37 @@ If `cloude-task-info` exits non-zero it prints the problem on stderr (an unparse
 
 ## 2. Determine the next state
 
-Look up the next state from this table:
+Ask the workflow definition for the next state — don't hardcode a
+transition table:
 
-| Current     | Next       |
-| ----------- | ---------- |
-| `PLANNING`  | `ITERATING` |
-| `ITERATING` | `REVIEW`   |
-| `REVIEW`    | `MERGING`  |
-| `MERGING`   | `COMPLETE` |
-| `COMPLETE`  | (terminal — stop with "already terminal, nothing to advance to") |
-| `DROPPED`   | (terminal — same) |
+```
+"$CLOUDE_ROOT/bin/cloude-workflow" next-state "$TODO" ${SKIP_REVIEW:+--skip-review}
+```
 
-**Skip-review override.** If `$SKIP_REVIEW` is truthy (`t`), the repo opts
-out of peer review and the `REVIEW` stage is skipped: when the current
-state is `ITERATING`, the next state is `MERGING` (not `REVIEW`). Every
-other transition is unchanged. (`:SKIP_REVIEW:` is copied from the staging
-project heading by `/promote`; absent means review is required, the
-default.)
+It prints the next state name and exits 0. If `$TODO` is a terminal
+state it prints nothing and exits 3 — stop with "already terminal,
+nothing to advance to".
+
+The `--skip-review` flag carries the repo's peer-review opt-out into
+the lookup: when it is passed and the current state is `ITERATING`, the
+helper returns `MERGING` instead of `REVIEW` (the `REVIEW` stage is
+skipped). `$SKIP_REVIEW` is `t` when the task's properties drawer has
+`:SKIP_REVIEW: t` — copied from the staging project heading by
+`/promote`; absent means review is required, the default. The
+`${SKIP_REVIEW:+--skip-review}` expansion adds the flag only when the
+property is set.
 
 ## 3. Load the DoD for the current state
 
-Read `Stage details` from `$CLOUDE_ROOT/CLAUDE.md` (the cloude repo, mounted at the same path inside the container). Find the `#### <CURRENT_STATE>` section and pull its **Definition of done** bullet list.
+Ask the workflow definition for the current state's Definition of Done
+(one bullet per line):
+
+```
+"$CLOUDE_ROOT/bin/cloude-workflow" dod "$TODO"
+```
+
+This is the same definition CLAUDE.md's `Stage details` is generated
+from, so the two cannot drift.
 
 ## 4. Evaluate each DoD item
 
@@ -91,12 +101,16 @@ Flip the heading with the shared helper — don't hand-edit the line:
 "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo <NEXT_STATE> --tag <new-tag>
 ```
 
-`<new-tag>` is the per-stage default for `<NEXT_STATE>`, **unless** an `--tag <name>` was passed to `/advance` (then use that name):
+`<new-tag>` is the per-stage default for `<NEXT_STATE>` — ask the
+workflow definition rather than hardcoding it:
 
-- `ITERATING → agent`
-- `REVIEW → blocked`
-- `MERGING → agent`
-- `COMPLETE → user`
+```
+"$CLOUDE_ROOT/bin/cloude-workflow" default-tag <NEXT_STATE>
+```
+
+(For the default workflow that is `ITERATING → agent`, `REVIEW →
+blocked`, `MERGING → agent`, `COMPLETE → user`.) **Unless** an `--tag
+<name>` was passed to `/advance`, in which case use that name instead.
 
 The helper rewrites only the first heading: it swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag (so re-runs don't accrete tags), and preserves the heading text and everything below it.
 

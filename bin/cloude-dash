@@ -52,8 +52,15 @@ STAGING = "STAGING"
 TODO = "TODO"
 RECENT = "RECENT"
 
-STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
-BALL_TAGS = ("agent", "user", "blocked")
+# Stage ordering and tag set come from the workflow definition
+# (bin/cloude_workflow.py) so this tool, cloude-list-active, and the
+# hooks all agree without separately maintained copies.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+_WORKFLOW = cloude_workflow.load()
+STAGE_ORDER = _WORKFLOW.stage_order
+BALL_TAGS = _WORKFLOW.ball_tag_names
 RECENT_LIMIT = 20
 
 

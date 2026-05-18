@@ -26,8 +26,10 @@ Other cases are silent no-ops.
 Registered via /etc/cloude/settings.json, which bin/cloude-run wires
 in by passing `--settings /etc/cloude/settings.json` to claude.
 
-The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
-("Stage details"). If you edit one, edit the other.
+The Definition-of-Done bullets, the in-flight state set, and the
+forward-transition driver all come from the workflow definition
+(workflows/<active>.toml) via bin/cloude_workflow.py — the same source
+CLAUDE.md's "Stage details" is generated from, so the two cannot drift.
 """
 
 import json
@@ -37,32 +39,12 @@ from pathlib import Path
 
 # The heading parser is shared with bin/cloude-on-user-prompt; both
 # hooks run on plain stdlib python3, so it lives in a sibling module
-# rather than orgparse (see cloude_org.py for the full rationale).
+# rather than orgparse (see cloude_org.py for the full rationale). The
+# workflow definition (DoD, in-flight states, transitions) is read from
+# cloude_workflow, another stdlib-only sibling.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import parse_heading  # noqa: E402
-
-
-DOD = {
-    "PLANNING": [
-        "The plan is written into the task's org file.",
-        "The user has approved the plan.",
-        "A draft PR has been created on GitHub.",
-    ],
-    "ITERATING": [
-        "The plan is implemented in code.",
-        "All user requests are implemented in code.",
-        "New and relevant tests pass locally.",
-        "Changes are committed and pushed.",
-        "CI tests are passing, or any failures can be attributed to irrelevant flakes.",
-        "The PR title and description on GitHub reflect the final change (not the draft-PR placeholder).",
-    ],
-    "REVIEW": [
-        "The PR has been reviewed.",
-    ],
-    "MERGING": [
-        "The PR is merged.",
-    ],
-}
+import cloude_workflow  # noqa: E402
 
 
 def main() -> int:
@@ -78,26 +60,29 @@ def main() -> int:
     if not task or not Path(task).is_file():
         return 0
 
+    wf = cloude_workflow.load()
+
     parsed = parse_heading(Path(task).read_text())
     if parsed is None:
         return 0
 
     state, tags = parsed
-    if state not in DOD or "agent" not in tags:
+    if state not in wf.in_flight or "agent" not in tags:
         return 0
 
-    print(json.dumps({"decision": "block", "reason": build_reason(state)}))
+    print(json.dumps({"decision": "block", "reason": build_reason(wf, state)}))
     return 0
 
 
-def build_reason(state: str) -> str:
-    bullets = "\n".join(f"  - {b}" for b in DOD[state])
+def build_reason(wf: cloude_workflow.Workflow, state: str) -> str:
+    bullets = "\n".join(f"  - {b}" for b in wf.states[state].dod_flat)
 
-    if state == "MERGING":
+    if wf.forward_driver(state) == "agent":
+        nxt = wf.next_state(state)
         forward_action = (
-            "  - If the DoD is met (PR is merged): run `/advance` to move\n"
-            "    to `COMPLETE :user:`. MERGING → COMPLETE is the one\n"
-            "    agent-driven forward transition.\n"
+            f"  - If the DoD is met: run `/advance` to move to\n"
+            f"    `{nxt} :{wf.default_tag(nxt)}:`. {state} → {nxt} is the\n"
+            f"    one agent-driven forward transition.\n"
         )
     else:
         forward_action = (
@@ -127,7 +112,7 @@ def build_reason(state: str) -> str:
         f"    so a deliberate re-stop will go through unblocked.\n"
         f"\n"
         f"Edit the heading directly in `$CLOUDE_TASK_FILE` to retag. From\n"
-        f"`ITERATING` you can also use `/iterate --tag user` or\n"
+        f"`{wf.role('iterate')}` you can also use `/iterate --tag user` or\n"
         f"`/iterate --tag blocked` as a shortcut."
     )
 

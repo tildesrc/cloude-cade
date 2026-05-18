@@ -29,18 +29,30 @@ import re
 import sys
 from pathlib import Path
 
+# The plan-accepted auto-advance (which state it fires from, which state
+# and tag it flips to) is defined by the workflow, not hardcoded here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
 
 def main() -> int:
     task = os.environ.get("CLOUDE_TASK_FILE")
     if not task or not Path(task).is_file():
         return 0  # not running against a cloude task
 
+    # The workflow may define a plan-accepted auto-advance; if it does
+    # not, this hook has nothing to do.
+    auto = cloude_workflow.load().auto_advance
+    if auto is None:
+        return 0
+
     content = Path(task).read_text()
 
-    # Only act when the task is currently in PLANNING. Don't surprise-flip
-    # mid-stage if the user invokes plan mode for an ad-hoc clarification.
+    # Only act when the task is in the auto-advance source state. Don't
+    # surprise-flip mid-stage if the user invokes plan mode for an
+    # ad-hoc clarification.
     heading_match = re.search(r"^\*\s+(\S+)", content, re.M)
-    if not heading_match or heading_match.group(1) != "PLANNING":
+    if not heading_match or heading_match.group(1) != auto["from"]:
         return 0
 
     plan = extract_plan_content()
@@ -48,14 +60,15 @@ def main() -> int:
     if plan:
         content = upsert_plan_section(content, plan)
 
-    content = flip_planning_to_iterating(content)
+    content = flip_heading(content, auto)
 
     Path(task).write_text(content)
 
     print(
-        "[cloude] Plan accepted; task auto-advanced PLANNING → ITERATING :agent:.\n"
+        f"[cloude] Plan accepted; task auto-advanced {auto['from']} → "
+        f"{auto['to']} :{auto['tag']}:.\n"
         "Plan written to the ** Plan section of the task file.\n"
-        "Begin implementing per CLAUDE.md's ITERATING responsibilities."
+        f"Begin implementing per CLAUDE.md's {auto['to']} responsibilities."
     )
     return 0
 
@@ -127,15 +140,21 @@ def upsert_plan_section(content: str, plan: str) -> str:
     return content.rstrip() + "\n\n" + plan_block
 
 
-def flip_planning_to_iterating(content: str) -> str:
-    """Replace `* PLANNING <text> [:tag:]` with `* ITERATING <text> :agent:`.
+def flip_heading(content: str, auto: dict) -> str:
+    """Replace `* <from> <text> [:tag:]` with `* <to> <text> :<tag>:`.
 
-    Strips any existing trailing tag chain to avoid accreting tags
-    across re-invocations.
+    `auto` is the workflow's auto-advance descriptor (`{"from", "to",
+    "tag"}`). Strips any existing trailing tag chain to avoid accreting
+    tags across re-invocations.
     """
+    pattern = (
+        r"^(\*\s+)"
+        + re.escape(auto["from"])
+        + r"\s+(.*?)\s*(?::[A-Za-z0-9_:]+:)?\s*(\r?\n)"
+    )
     return re.sub(
-        r"^(\*\s+)PLANNING\s+(.*?)\s*(?::[A-Za-z0-9_:]+:)?\s*(\r?\n)",
-        lambda m: f"{m.group(1)}ITERATING {m.group(2)} :agent:{m.group(3)}",
+        pattern,
+        lambda m: f"{m.group(1)}{auto['to']} {m.group(2)} :{auto['tag']}:{m.group(3)}",
         content,
         count=1,
         flags=re.M,

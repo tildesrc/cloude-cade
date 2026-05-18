@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Render a new active task .org file from tasks/TEMPLATE.org.
+
+Extracted from bin/cloude-promote-setup so the task-file rendering is a
+standalone, unit-testable step. `/promote` (via cloude-promote-setup)
+supplies the heading, slug, repo and mode; the starting TODO keyword
+and the `#+TODO:` keyword line come from the active workflow definition
+(bin/cloude_workflow.py).
+
+Usage:
+    cloude-render-taskfile --template <T> --dest <D> --mode <standard|adopt>
+                           --heading <H> --task-id <ID> --repo-url <URL>
+                           [--branch <B>] [--worktree <W>] [--pr-url <P>]
+                           [--adopted] [--skip-review]
+                           [--notes-prelude <TEXT>]
+
+The starting state is the workflow's promote-initial state for the
+given mode (standard / adopt). Stdlib-only.
+
+Exit codes:
+    0   rendered
+    2   usage error, missing template, or workflow problem
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# Run of spaces the scaffold heading uses between the heading text and
+# the trailing :user: tag (matches the previous cloude-promote-setup
+# rendering exactly).
+_HEADING_PAD = " " * 48
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--template", required=True)
+    parser.add_argument("--dest", required=True)
+    parser.add_argument("--mode", required=True, choices=("standard", "adopt"))
+    parser.add_argument("--heading", required=True)
+    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--repo-url", required=True)
+    parser.add_argument("--branch", default="")
+    parser.add_argument("--worktree", default="")
+    parser.add_argument("--pr-url", default="")
+    parser.add_argument("--adopted", action="store_true")
+    parser.add_argument("--skip-review", action="store_true")
+    parser.add_argument("--notes-prelude", default="")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit:
+        return 2
+
+    template = Path(args.template)
+    if not template.is_file():
+        sys.stderr.write(f"cloude-render-taskfile: template not found: {template}\n")
+        return 2
+
+    try:
+        wf = cloude_workflow.load(root=ROOT)
+        todo = wf.promote_initial(args.mode)
+    except cloude_workflow.WorkflowError as exc:
+        sys.stderr.write(f"cloude-render-taskfile: {exc}\n")
+        return 2
+
+    rendered = render(
+        template.read_text(),
+        wf=wf,
+        todo=todo,
+        heading=args.heading,
+        task_id=args.task_id,
+        repo_url=args.repo_url,
+        branch=args.branch,
+        worktree=args.worktree,
+        pr_url=args.pr_url,
+        adopted=args.adopted,
+        skip_review=args.skip_review,
+        notes_prelude=args.notes_prelude,
+    )
+
+    dest = Path(args.dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(rendered)
+    return 0
+
+
+def render(
+    text: str,
+    *,
+    wf: cloude_workflow.Workflow,
+    todo: str,
+    heading: str,
+    task_id: str,
+    repo_url: str,
+    branch: str = "",
+    worktree: str = "",
+    pr_url: str = "",
+    adopted: bool = False,
+    skip_review: bool = False,
+    notes_prelude: str = "",
+) -> str:
+    """Render a task file from the TEMPLATE.org `text`.
+
+    Importable so the test suite can drive it with mocked /promote
+    inputs without going through the CLI.
+    """
+    # 0. `#+TODO:` keyword line — from the workflow, so the rendered
+    #    file is correct even if the template scaffold is stale.
+    text = re.sub(
+        r"^#\+TODO:.*$",
+        f"#+TODO: {wf.todo_line}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+    # 1. Heading line: replace the scaffold "* <STATE> <task title> :user:"
+    #    with the starting TODO keyword and the real heading; the tag
+    #    stays :user: in both modes.
+    text = re.sub(
+        r"^\* \S+ <task title>\s+:user:\s*$",
+        f"* {todo} {heading}{_HEADING_PAD}:user:",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+    # 2. #+TITLE: <task title>
+    text = text.replace("#+TITLE: <task title>", f"#+TITLE: {heading}", 1)
+
+    # 3. Properties drawer values.
+    text = re.sub(
+        r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.MULTILINE
+    )
+    text = re.sub(
+        r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.MULTILINE
+    )
+    text = re.sub(
+        r"^(\s*:BRANCH:\s*)$", rf"\g<1>{branch}", text, count=1, flags=re.MULTILINE
+    )
+    text = re.sub(
+        r"^(\s*:WORKTREE:\s*)$", rf"\g<1>{worktree}", text, count=1, flags=re.MULTILINE
+    )
+    text = re.sub(
+        r"^(\s*:PR:\s*)$", rf"\g<1>{pr_url}", text, count=1, flags=re.MULTILINE
+    )
+
+    # 4. ADOPT-only: insert :ADOPTED: t just before :END: of the
+    #    properties drawer. The template omits it by default.
+    if adopted:
+        text = re.sub(
+            r"^(\s*:END:\s*)$",
+            "  :ADOPTED:  t\n" + r"\g<1>",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # 4b. --skip-review: insert :SKIP_REVIEW: t just before :END:, the
+    #     same way :ADOPTED: is. Absent by default.
+    if skip_review:
+        text = re.sub(
+            r"^(\s*:END:\s*)$",
+            "  :SKIP_REVIEW:  t\n" + r"\g<1>",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # 5. ADOPT-only: prepend a Notes-section line referencing the
+    #    adopted PR, above the template's prose body text.
+    if notes_prelude:
+        text = re.sub(
+            r"^(\*\* Notes\s*)$",
+            r"\g<1>\n   " + notes_prelude.replace("\\", "\\\\"),
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    return text
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

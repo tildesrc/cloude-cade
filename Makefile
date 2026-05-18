@@ -3,7 +3,7 @@ VOLUME := cloude-claude-creds
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 
-.PHONY: help build rebuild shell login info clean-image clean-volume clean-dind-data clean
+.PHONY: help build rebuild shell login info clean-image clean-volume clean-dind-data clean render render-check test
 
 help:
 	@echo "Targets:"
@@ -12,10 +12,22 @@ help:
 	@echo "  shell         Open a bash shell in a transient container"
 	@echo "  login         Run claude interactively to perform first-time login"
 	@echo "  info          Show image and volume status"
+	@echo "  render        Regenerate CLAUDE.md + TEMPLATE.org from the active workflow"
+	@echo "  render-check  Fail if the generated artifacts are out of date"
+	@echo "  test          Run the workflow test suite (pytest, via uv)"
 	@echo "  clean-image   Remove the image"
 	@echo "  clean-volume  Remove the credentials volume (forces re-login)"
 	@echo "  clean-dind-data  Remove per-task DinD data volumes (cloude-dind-*)"
 	@echo "  clean         clean-image + clean-volume + clean-dind-data"
+
+render:
+	python3 bin/cloude-render
+
+render-check:
+	python3 bin/cloude-render --check
+
+test:
+	uv run --with pytest pytest tests/
 
 build:
 	docker build \

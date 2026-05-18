@@ -31,10 +31,14 @@ heading still lives solely in `cloude-task-set-state`.
 """
 
 import re
+import sys
+from pathlib import Path
 
-# The who-has-the-ball tags, in priority order — see CLAUDE.md's
-# "Who-has-the-ball tag" section.
-BALL_TAGS = ("agent", "user", "blocked")
+# The who-has-the-ball tag set is part of the workflow definition, so it
+# is sourced from cloude_workflow rather than hardcoded here. Both
+# modules are stdlib-only siblings under bin/.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
 
 # The first top-level heading of a task file: leading stars + space, a
 # non-space TODO keyword, optional heading text, an optional trailing
@@ -67,7 +71,7 @@ def ball_tag(tags: list[str]) -> str:
     """Return the who-has-the-ball tag from a parsed tag list, or ''.
 
     `tags` is the list returned by `parse_heading`. If several tags are
-    present, the first of agent/user/blocked (in `BALL_TAGS` order)
-    wins.
+    present, the first in the workflow's ball-tag priority order wins.
     """
-    return next((t for t in BALL_TAGS if t in tags), "")
+    ball_tags = cloude_workflow.load().ball_tag_names
+    return next((t for t in ball_tags if t in tags), "")

@@ -15,15 +15,24 @@ Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"`. The h
 
 ## 2. Perform the transition
 
-Flip the heading with the shared helper:
+Resolve the iterate state and its default tag from the workflow
+definition rather than hardcoding them:
 
 ```
-"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo ITERATING --tag <tag>
+ITERATE_STATE="$( "$CLOUDE_ROOT/bin/cloude-workflow" role iterate )"
+ITERATE_TAG="$( "$CLOUDE_ROOT/bin/cloude-workflow" default-tag "$ITERATE_STATE" )"
 ```
 
-`<tag>` is `agent` (the per-stage default for ITERATING), **unless** an `--tag <name>` was passed to `/iterate` — then use that name. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
+(For the default workflow that is `ITERATING` / `agent`.) Then flip the
+heading with the shared helper:
 
-If the current state is already `ITERATING`, this is effectively a tag-reset (useful if the tag had drifted to `:user:` or `:blocked:` and you want to mark yourself back into active work).
+```
+"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo "$ITERATE_STATE" --tag <tag>
+```
+
+`<tag>` is `$ITERATE_TAG`, **unless** an `--tag <name>` was passed to `/iterate` — then use that name. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
+
+If the current state is already the iterate state, this is effectively a tag-reset (useful if the tag had drifted to `:user:` or `:blocked:` and you want to mark yourself back into active work).
 
 ## 3. Report
 

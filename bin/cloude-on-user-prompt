@@ -41,12 +41,11 @@ from pathlib import Path
 
 # The heading parser is shared with bin/cloude-on-stop; both hooks run
 # on plain stdlib python3, so it lives in a sibling module rather than
-# orgparse (see cloude_org.py for the full rationale).
+# orgparse (see cloude_org.py for the full rationale). The in-flight
+# state set comes from the workflow definition via cloude_workflow.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import ball_tag, parse_heading  # noqa: E402
-
-# In-flight stages — the terminal COMPLETE / DROPPED states are skipped.
-IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+import cloude_workflow  # noqa: E402
 
 
 def main() -> int:
@@ -65,7 +64,7 @@ def main() -> int:
         return 0
 
     state, tags = parsed
-    if state not in IN_FLIGHT or ball_tag(tags) != "user":
+    if state not in cloude_workflow.load().in_flight or ball_tag(tags) != "user":
         return 0
 
     if flip_to_agent(task):

@@ -1,0 +1,196 @@
+# An alternative cloude workflow: solo development, no peer-review stage.
+#
+# This workflow demonstrates that the state machine is templatable — it
+# is a complete, valid alternative to workflows/default.toml with a
+# different set of stages (no REVIEW). It is shipped as an example and
+# is NOT the repo-wide active workflow; `workflows/active` selects that.
+#
+# To make it active: put `solo` in workflows/active, then `make render`.
+
+name = "solo"
+description = "A solo development workflow with no peer-review stage."
+
+[roles]
+iterate = "ITERATING"
+drop = "DROPPED"
+
+[promote]
+standard = "PLANNING"
+adopt = "ITERATING"
+
+[[ball_tags]]
+name = "agent"
+description = "you are working autonomously."
+
+[[ball_tags]]
+name = "user"
+description = '''the ball is in the user's court (you are waiting on user
+  feedback, a decision, or a prompt to continue).'''
+
+[[ball_tags]]
+name = "blocked"
+description = '''waiting on something external to this workflow
+  (long-running external CI, an upstream dependency).'''
+
+[docs]
+workflow_states_body = '''
+The TODO keywords are: `PLANNING`, `ITERATING`, `MERGING`, `COMPLETE`,
+`DROPPED`.
+
+This is the solo workflow: there is no peer-review stage. A task goes
+straight from `ITERATING` to `MERGING` once the implementation is done.
+
+**On every new session, read your task file first.** When running
+inside a container, the absolute path is in the `CLOUDE_TASK_FILE`
+env var. The TODO keyword on the heading is your current stage; the
+per-stage responsibilities and DoD below tell you what to do and how
+to know you're finished.
+
+**Forward transitions out of `PLANNING` and `ITERATING` are
+user-driven only.** Do not advance these states on your own — finish
+your work to the stage's DoD, set the heading's tag to `:user:`, and
+wait for the user to move the task forward (or send you back with
+feedback). Transitioning to `DROPPED` is allowed from any state but
+should also generally be a user decision unless you have explicit
+authorization.
+
+`MERGING` is agent-driven: actively manage the merge — re-add to the
+queue on flaky failures, resolve trivial conflicts — and flip the
+TODO keyword to `COMPLETE` once the merge has landed. For `COMPLETE`
+and `DROPPED`, the in-container agent sets the TODO keyword and tag,
+then stops; the file move and worktree/tmux/branch cleanup happen
+from the host via the `/finalize` slash command.
+
+To actually flip the TODO keyword and tag, prefer the in-container
+slash commands over editing the heading by hand:
+
+- `/advance` — forward to the next stage. Surfaces the current
+  stage's DoD checklist and complains if anything's unmet before
+  performing the transition.
+- `/iterate` — back into `ITERATING` (used when a merge breaks).
+- `/drop` — to `DROPPED` from any non-terminal state. Reminds you
+  that the host then needs `/sweep` / `/finalize` to clean up.'''
+
+tag_defaults_body = '''
+- `PLANNING`, `ITERATING` — `:agent:` while you're working, `:user:`
+  when waiting for feedback, `:blocked:` if waiting on something
+  external.
+- `MERGING` — `:agent:` while you manage the merge queue, `:user:` if
+  something requires human judgment to resolve.'''
+
+who_has_ball_intro = '''
+Every in-flight task heading carries a tag indicating who currently
+has the ball:'''
+
+who_has_ball_outro = '''
+Flip this tag as the situation changes. This is *your* signal to the
+user — keep it accurate so the user can tell at a glance which tasks
+need their attention vs. which are progressing on their own vs. which
+are waiting on something neither of you controls.'''
+
+[[states]]
+name = "PLANNING"
+org_shortcut = "p!"
+kind = "in-flight"
+order = 2
+default_tag = "user"
+responsibilities = [
+  "Collect requirements.",
+  "Produce a plan for the implementation.",
+]
+definition_of_done = [
+  "The plan is written into the task's org file.",
+  "The user has approved the plan.",
+  "A draft PR has been created on GitHub.",
+]
+[states.forward]
+next = "ITERATING"
+driver = "user"
+[states.auto_advance]
+trigger = "plan_accepted"
+to = "ITERATING"
+tag = "agent"
+
+[[states]]
+name = "ITERATING"
+org_shortcut = "i!"
+kind = "in-flight"
+order = 1
+default_tag = "agent"
+responsibilities = [
+  "Implement the plan.",
+  "Implement any additional user requests or feedback.",
+  '''Update the PR title and description on GitHub so they describe the
+  change as implemented, replacing the placeholder text the draft PR
+  was opened with.''',
+]
+definition_of_done = [
+  "The plan is implemented in code.",
+  "All user requests are implemented in code.",
+  "New and relevant tests pass locally.",
+  "Changes are committed and pushed.",
+  '''CI tests are passing, or any failures can be attributed to
+  irrelevant flakes.''',
+  "The PR title and description on GitHub reflect the final change.",
+]
+[states.forward]
+next = "MERGING"
+driver = "user"
+
+[[states]]
+name = "MERGING"
+org_shortcut = "m!"
+kind = "in-flight"
+order = 0
+default_tag = "agent"
+responsibilities = [
+  "Add the PR to the merge queue.",
+  "If the PR exits the merge queue, re-add it.",
+]
+definition_of_done = [
+  "The PR is merged.",
+]
+[states.forward]
+next = "COMPLETE"
+driver = "agent"
+
+[[states]]
+name = "COMPLETE"
+org_shortcut = "c!"
+kind = "terminal"
+default_tag = "user"
+doc_prose = '''
+The container mounts the cloude repo read-only, so the file move
+itself is done from the host via `/finalize` — not by the
+in-container agent.'''
+responsibilities = [
+  '''Once the PR is merged, set the TODO keyword to `COMPLETE` and flip
+  the tag to `:user:`. Then stop — `/finalize` on the host will move
+  the file and clean up.''',
+]
+definition_of_done = [
+  "The task file has TODO state `COMPLETE` and tag `:user:`.",
+  '''(The host-side `/finalize` then moves the file to
+  `tasks/completed/`, kills the tmux session, removes the worktree,
+  and deletes the local branch.)''',
+]
+
+[[states]]
+name = "DROPPED"
+org_shortcut = "x@"
+kind = "terminal"
+default_tag = "user"
+doc_prose = '''
+Same read-only-mount caveat as COMPLETE: the file move and cleanup
+happen from the host via `/finalize`.'''
+responsibilities = [
+  '''Set the TODO keyword to `DROPPED` and flip the tag to `:user:`.
+  Then stop.''',
+]
+definition_of_done = [
+  "The task file has TODO state `DROPPED` and tag `:user:`.",
+  '''(The host-side `/finalize` then closes the PR, moves the file to
+  `tasks/dropped/`, kills the tmux session, and removes the worktree.
+  The local branch is preserved on DROPPED in case you want to
+  revisit.)''',
+]

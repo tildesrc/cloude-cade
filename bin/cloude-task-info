@@ -44,7 +44,13 @@ except ModuleNotFoundError:
 
 REQUIRED = ("WORKTREE", "BRANCH", "PR")
 OPTIONAL = ("REPO", "ID", "ADOPTED", "SKIP_REVIEW", "COMPANION_PR")
-BALL_TAGS = ("agent", "user", "blocked")
+
+# The who-has-the-ball tag set comes from the workflow definition
+# (bin/cloude_workflow.py, a stdlib-only sibling) rather than hardcoded.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+BALL_TAGS = cloude_workflow.load().ball_tag_names
 
 
 def _ball_tag(tags) -> str:

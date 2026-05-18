@@ -21,6 +21,7 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # User-specific task data — captured per-machine, not part of the repo.
 /tasks/staging.org

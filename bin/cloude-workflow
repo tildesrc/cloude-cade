@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Query the active workflow definition.
+
+A thin CLI over bin/cloude_workflow.py for the slash-command skills
+(/advance, /iterate, /drop), so they read the state machine from the
+workflow definition instead of embedding a hardcoded next-state table.
+
+Usage:
+    cloude-workflow next-state <STATE> [--skip-review]
+    cloude-workflow forward-driver <STATE>
+    cloude-workflow default-tag <STATE>
+    cloude-workflow dod <STATE>
+    cloude-workflow responsibilities <STATE>
+    cloude-workflow role <NAME>
+    cloude-workflow info
+
+Commands:
+    next-state      Print the forward state from <STATE>. With
+                    --skip-review, applies the skip-review override.
+    forward-driver  Print 'user' or 'agent' — who drives the forward
+                    transition out of <STATE>.
+    default-tag     Print the who-has-the-ball tag a transition into
+                    <STATE> sets.
+    dod             Print <STATE>'s definition-of-done bullets, one per
+                    line (un-wrapped to single lines).
+    responsibilities  Print <STATE>'s responsibilities, one per line.
+    role            Print the state playing role <NAME> (e.g. iterate,
+                    drop).
+    info            Print shell-safe KEY=VALUE lines describing the
+                    workflow (sourceable by bash).
+
+Exit codes:
+    0   success
+    2   usage error, or unknown state / role
+    3   no result (e.g. next-state of a terminal state)
+"""
+
+from __future__ import annotations
+
+import shlex
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        sys.stdout.write(__doc__ or "")
+        return 0 if argv else 2
+
+    command, rest = argv[0], argv[1:]
+
+    try:
+        wf = cloude_workflow.load(root=ROOT)
+    except cloude_workflow.WorkflowError as exc:
+        sys.stderr.write(f"cloude-workflow: {exc}\n")
+        return 2
+
+    try:
+        if command == "next-state":
+            return _next_state(wf, rest)
+        if command == "forward-driver":
+            return _scalar(wf, rest, lambda s: wf.forward_driver(s))
+        if command == "default-tag":
+            return _scalar(wf, rest, lambda s: wf.default_tag(s))
+        if command == "dod":
+            return _bullets(wf, rest, lambda st: st.dod_flat)
+        if command == "responsibilities":
+            return _bullets(wf, rest, lambda st: st.responsibilities_flat)
+        if command == "role":
+            return _role(wf, rest)
+        if command == "info":
+            return _info(wf, rest)
+    except cloude_workflow.WorkflowError as exc:
+        sys.stderr.write(f"cloude-workflow: {exc}\n")
+        return 2
+
+    sys.stderr.write(f"cloude-workflow: unknown command: {command}\n")
+    return 2
+
+
+def _one_state(rest: list[str]) -> str:
+    positional = [a for a in rest if not a.startswith("-")]
+    if len(positional) != 1:
+        raise cloude_workflow.WorkflowError("expected exactly one <STATE>")
+    return positional[0]
+
+
+def _next_state(wf: cloude_workflow.Workflow, rest: list[str]) -> int:
+    skip_review = "--skip-review" in rest
+    state = _one_state(rest)
+    nxt = wf.next_state(state, skip_review=skip_review)
+    if nxt is None:
+        sys.stderr.write(f"cloude-workflow: {state} is terminal — no next state\n")
+        return 3
+    print(nxt)
+    return 0
+
+
+def _scalar(wf, rest, fn) -> int:
+    state = _one_state(rest)
+    value = fn(state)
+    if value is None:
+        return 3
+    print(value)
+    return 0
+
+
+def _bullets(wf, rest, fn) -> int:
+    state = _one_state(rest)
+    st = wf.states.get(state)
+    if st is None:
+        raise cloude_workflow.WorkflowError(
+            f"unknown state {state!r} (known: {', '.join(wf.state_names)})"
+        )
+    for bullet in fn(st):
+        print(bullet)
+    return 0
+
+
+def _role(wf: cloude_workflow.Workflow, rest: list[str]) -> int:
+    if len(rest) != 1:
+        raise cloude_workflow.WorkflowError("expected exactly one <NAME>")
+    print(wf.role(rest[0]))
+    return 0
+
+
+def _info(wf: cloude_workflow.Workflow, rest: list[str]) -> int:
+    if rest:
+        raise cloude_workflow.WorkflowError("info takes no arguments")
+    auto = wf.auto_advance or {}
+    pairs = {
+        "WORKFLOW": wf.name,
+        "STATES": " ".join(wf.state_names),
+        "IN_FLIGHT": " ".join(wf.in_flight),
+        "TERMINAL": " ".join(wf.terminal),
+        "BALL_TAGS": " ".join(wf.ball_tag_names),
+        "TODO_LINE": wf.todo_line,
+        "AUTO_ADVANCE_FROM": auto.get("from", ""),
+        "AUTO_ADVANCE_TO": auto.get("to", ""),
+    }
+    for key, value in pairs.items():
+        print(f"{key}={shlex.quote(value)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

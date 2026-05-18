@@ -43,10 +43,16 @@ CLOUDE_ROOT = Path(
 )
 ACTIVE = CLOUDE_ROOT / "tasks" / "active"
 
-# Match cloude-dash so the ordering is consistent across tools.
-STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
-TERMINAL_STATES = {"COMPLETE", "DROPPED"}
-BALL_TAGS = ("agent", "user", "blocked")
+# Stage ordering and tag set come from the workflow definition
+# (bin/cloude_workflow.py) so this tool, cloude-dash, and the hooks all
+# agree without separately maintained copies.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_workflow  # noqa: E402
+
+_WORKFLOW = cloude_workflow.load()
+STAGE_ORDER = _WORKFLOW.stage_order
+TERMINAL_STATES = set(_WORKFLOW.terminal)
+BALL_TAGS = _WORKFLOW.ball_tag_names
 
 
 def _ball_tag(tags) -> str:

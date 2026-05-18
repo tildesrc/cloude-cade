@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Regenerate the workflow-derived artifacts from the active workflow.
+
+Renders CLAUDE.md's workflow sections and tasks/TEMPLATE.org from
+`workflows/<active>.toml`. See bin/cloude_render.py for the rendering
+logic.
+
+Usage:
+    cloude-render [--check] [--workflow NAME]
+
+    --check         Render in memory and diff against the files on
+                    disk. Exit 1 if anything is out of date (CI guard);
+                    write nothing.
+    --workflow NAME Render from workflows/<NAME>.toml instead of the
+                    repo-wide active workflow.
+
+Exit codes:
+    0   files written (or, with --check, already up to date)
+    1   --check found drift
+    2   usage error, or a workflow / artifact problem
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cloude_render  # noqa: E402
+import cloude_workflow  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main(argv: list[str]) -> int:
+    check = False
+    name: str | None = None
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--check":
+            check = True
+        elif arg == "--workflow":
+            i += 1
+            if i >= len(argv):
+                sys.stderr.write("cloude-render: --workflow needs a value\n")
+                return 2
+            name = argv[i]
+        elif arg in ("-h", "--help"):
+            sys.stdout.write(__doc__ or "")
+            return 0
+        else:
+            sys.stderr.write(f"cloude-render: unexpected argument: {arg}\n")
+            return 2
+        i += 1
+
+    try:
+        wf = cloude_workflow.load(name=name, root=ROOT)
+    except cloude_workflow.WorkflowError as exc:
+        sys.stderr.write(f"cloude-render: {exc}\n")
+        return 2
+
+    artifacts = [
+        (ROOT / "CLAUDE.md", cloude_render.render_claude_md),
+        (ROOT / "tasks" / "TEMPLATE.org", cloude_render.render_template_org),
+    ]
+
+    drift = False
+    for path, render in artifacts:
+        if not path.is_file():
+            sys.stderr.write(f"cloude-render: artifact not found: {path}\n")
+            return 2
+        current = path.read_text()
+        try:
+            rendered = render(current, wf)
+        except ValueError as exc:
+            sys.stderr.write(f"cloude-render: {path.name}: {exc}\n")
+            return 2
+
+        rel = path.relative_to(ROOT)
+        if rendered == current:
+            print(f"  up to date: {rel}")
+            continue
+        if check:
+            print(f"  OUT OF DATE: {rel}")
+            drift = True
+        else:
+            path.write_text(rendered)
+            print(f"  rendered: {rel}")
+
+    if check and drift:
+        sys.stderr.write(
+            "cloude-render: artifacts are out of date — run `make render`\n"
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -51,14 +51,11 @@ Rules when working on a task:
 
 ### Workflow states
 
-The TODO keywords are: `PLANNING`, `ITERATING`, `REVIEW`, `MERGING`,
-`COMPLETE`, `DROPPED`.
+The TODO keywords are: `PLANNING`, `ITERATING`, `MERGING`, `COMPLETE`,
+`DROPPED`.
 
-Repos that opt out of peer review skip the `REVIEW` stage entirely. A
-task whose properties drawer has `:SKIP_REVIEW: t` advances straight
-from `ITERATING` to `MERGING` — `/advance` consults the property and
-bypasses `REVIEW`. The `REVIEW` keyword still exists; it's simply never
-entered for such tasks.
+This is the solo workflow: there is no peer-review stage. A task goes
+straight from `ITERATING` to `MERGING` once the implementation is done.
 
 **On every new session, read your task file first.** When running
 inside a container, the absolute path is in the `CLOUDE_TASK_FILE`
@@ -66,7 +63,7 @@ env var. The TODO keyword on the heading is your current stage; the
 per-stage responsibilities and DoD below tell you what to do and how
 to know you're finished.
 
-**Forward transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are
+**Forward transitions out of `PLANNING` and `ITERATING` are
 user-driven only.** Do not advance these states on your own — finish
 your work to the stage's DoD, set the heading's tag to `:user:`, and
 wait for the user to move the task forward (or send you back with
@@ -79,9 +76,7 @@ queue on flaky failures, resolve trivial conflicts — and flip the
 TODO keyword to `COMPLETE` once the merge has landed. For `COMPLETE`
 and `DROPPED`, the in-container agent sets the TODO keyword and tag,
 then stops; the file move and worktree/tmux/branch cleanup happen
-from the host via the `/finalize` slash command (the cloude repo is
-mounted read-only inside the container, so the agent can't perform
-the move itself).
+from the host via the `/finalize` slash command.
 
 To actually flip the TODO keyword and tag, prefer the in-container
 slash commands over editing the heading by hand:
@@ -89,14 +84,9 @@ slash commands over editing the heading by hand:
 - `/advance` — forward to the next stage. Surfaces the current
   stage's DoD checklist and complains if anything's unmet before
   performing the transition.
-- `/iterate` — back into `ITERATING` (used when review comments come
-  in or a merge breaks).
+- `/iterate` — back into `ITERATING` (used when a merge breaks).
 - `/drop` — to `DROPPED` from any non-terminal state. Reminds you
   that the host then needs `/sweep` / `/finalize` to clean up.
-
-The "forward transitions out of PLANNING/ITERATING/REVIEW are
-user-driven only" rule above is still your responsibility; `/advance`
-is mechanical and won't enforce it.
 
 ### Stage details
 
@@ -116,14 +106,9 @@ is mechanical and won't enforce it.
 **Responsibilities**
 - Implement the plan.
 - Implement any additional user requests or feedback.
-- Implement any review comments the user has approved for
-  implementation.
 - Update the PR title and description on GitHub so they describe the
   change as implemented, replacing the placeholder text the draft PR
-  was opened with. The description should describe the change only —
-  do **not** include a "Test Plan", "Verification", or equivalent
-  test-steps section. Verification notes stay local: keep them in the
-  task's org file (`** Notes` / acceptance criteria), not on the PR.
+  was opened with.
 
 **Definition of done**
 - The plan is implemented in code.
@@ -132,20 +117,7 @@ is mechanical and won't enforce it.
 - Changes are committed and pushed.
 - CI tests are passing, or any failures can be attributed to
   irrelevant flakes.
-- The PR title and description on GitHub reflect the final change
-  (not the draft-PR placeholder), and the description carries no Test
-  Plan / Verification section.
-
-#### REVIEW
-
-Skipped entirely for tasks with `:SKIP_REVIEW: t` — `/advance` goes
-`ITERATING → MERGING` and this stage is never entered.
-
-**Responsibilities**
-- Wait for review or approval of the PR.
-
-**Definition of done**
-- The PR has been reviewed.
+- The PR title and description on GitHub reflect the final change.
 
 #### MERGING
 
@@ -194,8 +166,6 @@ happen from the host via `/finalize`.
 - `PLANNING`, `ITERATING` — `:agent:` while you're working, `:user:`
   when waiting for feedback, `:blocked:` if waiting on something
   external.
-- `REVIEW` — `:blocked:` by default (waiting on peer reviewers). Flip
-  to `:user:` if reviewers leave comments that need a triage decision.
 - `MERGING` — `:agent:` while you manage the merge queue, `:user:` if
   something requires human judgment to resolve.
 
@@ -207,9 +177,8 @@ has the ball:
 - `:agent:` — you are working autonomously.
 - `:user:` — the ball is in the user's court (you are waiting on user
   feedback, a decision, or a prompt to continue).
-- `:blocked:` — waiting on something external to this workflow (peer
-  reviewers, long-running external CI, an upstream dependency).
-  `REVIEW` is `:blocked:` by default.
+- `:blocked:` — waiting on something external to this workflow
+  (long-running external CI, an upstream dependency).
 
 Flip this tag as the situation changes. This is *your* signal to the
 user — keep it accurate so the user can tell at a glance which tasks

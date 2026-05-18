@@ -17,13 +17,22 @@ Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"`. The h
 
 ## 3. Perform the transition
 
-Flip the heading with the shared helper:
+Resolve the drop state and its default tag from the workflow definition
+rather than hardcoding them:
 
 ```
-"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo DROPPED --tag <tag>
+DROP_STATE="$( "$CLOUDE_ROOT/bin/cloude-workflow" role drop )"
+DROP_TAG="$( "$CLOUDE_ROOT/bin/cloude-workflow" default-tag "$DROP_STATE" )"
 ```
 
-`<tag>` is `user` (the per-stage default for DROPPED — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed to `/drop`. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
+(For the default workflow that is `DROPPED` / `user`.) Then flip the
+heading with the shared helper:
+
+```
+"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo "$DROP_STATE" --tag <tag>
+```
+
+`<tag>` is `$DROP_TAG` (for the default workflow, `user` — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed to `/drop`. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
 
 ## 4. Report
 

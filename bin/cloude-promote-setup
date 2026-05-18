@@ -268,106 +268,42 @@ mkdir -p "$(dirname "$TASK_FILE")"
 # task_id = filename minus .org. ID property uses the YYYY-MM-DD-slug form.
 TASK_ID="$(basename "$TASK_FILE" .org)"
 
-# Choose the starting state per mode.
+# Choose heading and mode-specific fields. The starting TODO keyword
+# itself comes from the active workflow (cloude-render-taskfile resolves
+# it from --mode), not from a hardcoded keyword here.
 if [[ "$MODE" == "standard" ]]; then
-    NEW_TODO="PLANNING"
     NEW_HEADING="$HEADING"
-    ADOPTED_LINE=""
     NOTES_PRELUDE=""
 else
-    NEW_TODO="ITERATING"
     NEW_HEADING="$PR_TITLE"
-    ADOPTED_LINE="  :ADOPTED:  t"
     NOTES_PRELUDE="Adopted from PR $PR_URL — original heading: ADOPT $PR_URL"
 fi
 
+# The task-file render itself lives in bin/cloude-render-taskfile so it
+# can be unit-tested with mocked /promote inputs. It renders the heading,
+# #+TITLE:, properties drawer, and (for ADOPT) the :ADOPTED: property and
+# Notes prelude; the #+TODO: line and starting state come from the
+# active workflow definition.
+RENDER_ARGS=(
+    --template "$TEMPLATE"
+    --dest "$TASK_FILE"
+    --mode "$MODE"
+    --heading "$NEW_HEADING"
+    --task-id "$TASK_ID"
+    --repo-url "$REPO_URL"
+    --branch "$BRANCH"
+    --worktree "$WORKTREE"
+    --pr-url "$PR_URL"
+)
+if [[ "$MODE" == "adopt" ]]; then
+    RENDER_ARGS+=( --adopted --notes-prelude "$NOTES_PRELUDE" )
+fi
 # --skip-review applies to both modes: the repo opts out of peer review.
-SKIP_REVIEW_LINE=""
 if [[ -n "$SKIP_REVIEW" ]]; then
-    SKIP_REVIEW_LINE="  :SKIP_REVIEW:  t"
+    RENDER_ARGS+=( --skip-review )
 fi
 
-if ! python3 - <<'PY' \
-        "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
-        "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
-        "$SKIP_REVIEW_LINE" "$NOTES_PRELUDE"
-import re
-import sys
-from pathlib import Path
-
-(_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
- pr_url, adopted_line, skip_review_line, notes_prelude) = sys.argv
-
-text = Path(tmpl).read_text()
-
-# 1. Heading line: replace "* PLANNING <task title>" with the right TODO
-#    and heading; tag stays :user: in both modes.
-text = re.sub(
-    r"^\* PLANNING <task title>\s+:user:\s*$",
-    f"* {todo} {heading}                                                :user:",
-    text,
-    count=1,
-    flags=re.MULTILINE,
-)
-
-# 2. #+TITLE: <task title>
-text = text.replace("#+TITLE: <task title>", f"#+TITLE: {heading}", 1)
-
-# 3. Properties drawer values.
-text = re.sub(
-    r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:BRANCH:\s*)$", rf"\g<1>{branch}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:WORKTREE:\s*)$", rf"\g<1>{worktree}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:PR:\s*)$", rf"\g<1>{pr_url}", text, count=1, flags=re.MULTILINE
-)
-
-# 4. ADOPT-only: insert :ADOPTED: t just before :END: of the properties
-#    drawer. The template doesn't include the property by default, so add.
-if adopted_line:
-    text = re.sub(
-        r"^(\s*:END:\s*)$",
-        adopted_line + "\n" + r"\g<1>",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-# 4b. --skip-review: insert :SKIP_REVIEW: t just before :END: of the
-#     properties drawer, same as :ADOPTED:. Absent by default — only
-#     added when the repo opts out of peer review.
-if skip_review_line:
-    text = re.sub(
-        r"^(\s*:END:\s*)$",
-        skip_review_line + "\n" + r"\g<1>",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-# 5. ADOPT-only: prepend a Notes-section line referencing the adopted PR.
-#    The template's "** Notes" section starts with prose body text; we
-#    insert our line above it so the user's later edits don't lose it.
-if notes_prelude:
-    text = re.sub(
-        r"^(\*\* Notes\s*)$",
-        r"\g<1>\n   " + notes_prelude.replace("\\", "\\\\"),
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-Path(dest).write_text(text)
-PY
-then
+if ! "$CLOUDE_ROOT/bin/cloude-render-taskfile" "${RENDER_ARGS[@]}"; then
     bail 13 "task-file render failed"
 fi
 record "Rendered task file $TASK_FILE"
