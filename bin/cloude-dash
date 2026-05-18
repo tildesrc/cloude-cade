@@ -378,9 +378,9 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
                 right = repo
             else:
                 line = f"{marker} {state} {tag} {t.title}"
-                # Right margin: project header then PR number, two
+                # Right margin: PR number then project header, two
                 # spaces apart; either part may be absent.
-                right = "  ".join(x for x in (repo, _pr_number(t.pr_url)) if x)
+                right = "  ".join(x for x in (_pr_number(t.pr_url), repo) if x)
             if right:
                 pad = max(1, w - 1 - len(line) - len(right))
                 line = line + (" " * pad) + right
