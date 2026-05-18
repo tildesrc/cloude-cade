@@ -54,6 +54,9 @@ RECENT = "RECENT"
 
 STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
 BALL_TAGS = ("agent", "user", "blocked")
+# Terminal TODO keywords: a task in one of these is done, so its
+# who-has-the-ball tag is stale noise and is not drawn.
+TERMINAL_STATES = frozenset({"COMPLETE", "DROPPED"})
 RECENT_LIMIT = 20
 
 
@@ -369,7 +372,10 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
             marker = ">" if i == selected else " "
             attr = curses.A_REVERSE if i == selected else 0
             state = (t.state or "—").ljust(9)
-            tag = f":{t.tag}:".ljust(10) if t.tag else "".ljust(10)
+            # Terminal-state tasks (COMPLETE/DROPPED) still sitting in
+            # tasks/active/ carry a stale tag — suppress it.
+            show_tag = bool(t.tag) and t.state not in TERMINAL_STATES
+            tag = f":{t.tag}:".ljust(10) if show_tag else "".ljust(10)
             repo = t.repo or ""
             if t.section == RECENT:
                 date = _date_from_filename(t.path)
@@ -385,7 +391,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
                 pad = max(1, w - 1 - len(line) - len(right))
                 line = line + (" " * pad) + right
             stdscr.addnstr(y, 0, line, w - 1, attr)
-            if t.tag and t.section != RECENT and not attr:
+            if show_tag and t.section != RECENT and not attr:
                 tag_str = f":{t.tag}:"
                 tag_col = 2 + len(state) + 1
                 if tag_col + len(tag_str) < w:
