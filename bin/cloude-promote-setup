@@ -43,6 +43,10 @@ Common required args:
   --task-file <abs-path>         tasks/active/<YYYY-MM-DD>-<slug>.org
   --staging-heading <text>       exact heading to delete from staging.org
 
+Common optional args:
+  --skip-review                  repo opts out of peer review; render
+                                 :SKIP_REVIEW: t into the task file
+
 Standard-mode args:
   --heading <text>               idea heading (becomes the task title)
   --default-branch <branch>      base branch for the new PR
@@ -70,6 +74,7 @@ BASE_REF=""
 PR_URL=""
 PR_TITLE=""
 PR_NUMBER=""
+SKIP_REVIEW=""
 
 if [[ $# -eq 0 ]]; then
     usage >&2
@@ -90,6 +95,7 @@ while (($#)); do
         --pr-url)            PR_URL="$2"; shift 2 ;;
         --pr-title)          PR_TITLE="$2"; shift 2 ;;
         --pr-number)         PR_NUMBER="$2"; shift 2 ;;
+        --skip-review)       SKIP_REVIEW=1; shift ;;
         -h|--help)           usage; exit 0 ;;
         *) echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 30 ;;
     esac
@@ -275,16 +281,22 @@ else
     NOTES_PRELUDE="Adopted from PR $PR_URL — original heading: ADOPT $PR_URL"
 fi
 
+# --skip-review applies to both modes: the repo opts out of peer review.
+SKIP_REVIEW_LINE=""
+if [[ -n "$SKIP_REVIEW" ]]; then
+    SKIP_REVIEW_LINE="  :SKIP_REVIEW:  t"
+fi
+
 if ! python3 - <<'PY' \
         "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
         "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
-        "$NOTES_PRELUDE"
+        "$SKIP_REVIEW_LINE" "$NOTES_PRELUDE"
 import re
 import sys
 from pathlib import Path
 
 (_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
- pr_url, adopted_line, notes_prelude) = sys.argv
+ pr_url, adopted_line, skip_review_line, notes_prelude) = sys.argv
 
 text = Path(tmpl).read_text()
 
@@ -324,6 +336,18 @@ if adopted_line:
     text = re.sub(
         r"^(\s*:END:\s*)$",
         adopted_line + "\n" + r"\g<1>",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+# 4b. --skip-review: insert :SKIP_REVIEW: t just before :END: of the
+#     properties drawer, same as :ADOPTED:. Absent by default — only
+#     added when the repo opts out of peer review.
+if skip_review_line:
+    text = re.sub(
+        r"^(\s*:END:\s*)$",
+        skip_review_line + "\n" + r"\g<1>",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -441,4 +465,8 @@ tmux session: $TMUX_SESSION (attach with: tmux attach -t $TMUX_SESSION)
 Staging entry removed: yes
 Starting state: ITERATING :user: — waiting for the user's direction on the adopted PR.
 EOF
+fi
+
+if [[ -n "$SKIP_REVIEW" ]]; then
+    echo "Peer review: skipped — :SKIP_REVIEW: t set; /advance skips the REVIEW stage (ITERATING → MERGING)."
 fi

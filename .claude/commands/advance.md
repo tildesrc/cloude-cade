@@ -20,6 +20,7 @@ eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"
 - `$TAG` — the current who-has-the-ball tag (`agent` / `user` / `blocked`, or empty).
 - `$HEADING` — the heading text.
 - `$WORKTREE`, `$BRANCH`, `$PR` — properties-drawer fields that feed the DoD checks below (plus `$REPO`, `$ID`, and derived fields you can ignore here).
+- `$SKIP_REVIEW` — `t` when the repo opts out of peer review; controls the next-state lookup in step 2 (empty otherwise).
 
 If `cloude-task-info` exits non-zero it prints the problem on stderr (an unparseable file, or a missing required property — it names the key). Surface that to the user and stop rather than guessing.
 
@@ -35,6 +36,13 @@ Look up the next state from this table:
 | `MERGING`   | `COMPLETE` |
 | `COMPLETE`  | (terminal — stop with "already terminal, nothing to advance to") |
 | `DROPPED`   | (terminal — same) |
+
+**Skip-review override.** If `$SKIP_REVIEW` is truthy (`t`), the repo opts
+out of peer review and the `REVIEW` stage is skipped: when the current
+state is `ITERATING`, the next state is `MERGING` (not `REVIEW`). Every
+other transition is unchanged. (`:SKIP_REVIEW:` is copied from the staging
+project heading by `/promote`; absent means review is required, the
+default.)
 
 ## 3. Load the DoD for the current state
 
@@ -98,6 +106,13 @@ Print one short summary:
 
 ```
 Advanced: <CURRENT_STATE> :<old-tag>:  →  <NEXT_STATE> :<new-tag>:
+```
+
+When the skip-review override applied (`ITERATING → MERGING`), append a
+parenthetical so it's clear `REVIEW` was intentionally bypassed:
+
+```
+Advanced: ITERATING :agent:  →  MERGING :agent:  (REVIEW skipped — repo opts out of peer review)
 ```
 
 **If the new tag is `:agent:`, do not stop here — immediately begin executing the new stage's responsibilities.** The user's `/advance` invocation IS their go-ahead; don't ask "should I…?" before starting work the stage explicitly assigns to the agent (per `CLAUDE.md`'s Stage details). Examples:

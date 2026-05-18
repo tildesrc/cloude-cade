@@ -45,6 +45,7 @@ bin/cloude-list-staging --select <N>
 - `HEADING` — the exact idea heading text (→ `--staging-heading`, and `--heading` in standard mode).
 - `MODE` — `standard` or `adopt` (see step 2).
 - `PR_URL` — the adopted PR URL in ADOPT mode, empty otherwise.
+- `SKIP_REVIEW` — the project's optional `:SKIP_REVIEW:` property (`t` when the repo opts out of peer review, empty otherwise; see step 4).
 
 If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 
@@ -96,6 +97,12 @@ Plus mode-specific flags:
 
 - **Standard**: `--heading <idea-heading-text>` `--default-branch <default-branch>`
 - **ADOPT**: `--head-ref <head-ref-name>` `--base-ref <base-ref-name>` `--pr-url <pr-url>` `--pr-title <pr-title>` `--pr-number <pr-number>`
+
+Plus, in either mode, if `SKIP_REVIEW` from step 1 is `t`, add the
+`--skip-review` flag. That renders `:SKIP_REVIEW: t` into the new task
+file's properties drawer, so the repo's peer-review opt-out travels with
+the task the same way `:REPO:` does — and `/advance` will later skip the
+`REVIEW` stage (`ITERATING → MERGING`).
 
 The script ensures the source clone exists, creates the worktree + branch, opens the draft PR (standard only), renders the task file from `tasks/TEMPLATE.org`, removes the idea from `tasks/staging.org`, and starts the detached tmux session.
 

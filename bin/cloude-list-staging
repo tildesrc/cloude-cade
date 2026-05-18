@@ -32,6 +32,11 @@
 #   HEADING=<exact idea heading text>
 #   MODE=<standard|adopt>
 #   PR_URL=<adopted PR url, or empty>
+#   SKIP_REVIEW=<project's :SKIP_REVIEW: property, or empty>
+#
+# SKIP_REVIEW carries the project heading's optional :SKIP_REVIEW:
+# property (`t` when the repo opts out of peer review). /promote
+# forwards it to cloude-promote-setup so it lands in the task file.
 #
 # Exit 0 on success (including empty staging); exit 2 on a usage
 # error, an out-of-range --select index, or a file that can't be
@@ -79,6 +84,7 @@ def _collect(root):
             continue
         project_name = str(project.heading).strip()
         repo = props["REPO"].strip()
+        skip_review = (props.get("SKIP_REVIEW") or "").strip()
         for idea in project.children:
             n += 1
             records.append(
@@ -86,6 +92,7 @@ def _collect(root):
                     "index": n,
                     "project": project_name,
                     "repo": repo,
+                    "skip_review": skip_review,
                     "title": str(idea.heading).strip(),
                 }
             )
@@ -155,6 +162,7 @@ def main(argv: list[str]) -> int:
         _emit("HEADING", title)
         _emit("MODE", "adopt" if is_adopt else "standard")
         _emit("PR_URL", title[len("ADOPT ") :].strip() if is_adopt else "")
+        _emit("SKIP_REVIEW", match["skip_review"])
         return 0
 
     print("PROMOTABLE")
