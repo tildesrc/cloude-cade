@@ -11,16 +11,17 @@ Mechanical, no DoD check, no preconditions. Only edits `$CLOUDE_TASK_FILE` (the 
 
 ## 1. Read the task file
 
-Read `$CLOUDE_TASK_FILE`. Parse the top-level heading's current TODO keyword, heading text, and existing tag(s).
+Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"`. The helper emits shell-safe `KEY=VALUE` lines; after `eval`, `$TODO` and `$TAG` hold the current state for the report below. Don't hand-parse the heading. If the command exits non-zero, surface its stderr and stop.
 
 ## 2. Perform the transition
 
-Edit the heading line:
+Flip the heading with the shared helper:
 
-- TODO keyword → `ITERATING`
-- Heading tag → `:agent:` (the per-stage default for ITERATING), **unless** an `--tag <name>` was passed.
+```
+"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo ITERATING --tag <tag>
+```
 
-Strip any existing trailing `:tag:` markers before appending the new one. Preserve the heading text and leading indentation exactly. Don't touch anything below the heading.
+`<tag>` is `agent` (the per-stage default for ITERATING), **unless** an `--tag <name>` was passed to `/iterate` — then use that name. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
 
 If the current state is already `ITERATING`, this is effectively a tag-reset (useful if the tag had drifted to `:user:` or `:blocked:` and you want to mark yourself back into active work).
 

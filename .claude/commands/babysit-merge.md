@@ -23,7 +23,7 @@ Only edits the worktree (cloude repo is read-only inside the container). On succ
 
 ## 1. Read inputs
 
-From `$CLOUDE_TASK_FILE`'s properties drawer: `:WORKTREE:`, `:PR:`. If `:PR:` is missing or unset, **bail immediately** (see Bail-out hygiene) with note "no :PR: in task file; can't babysit merge".
+Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"` to load `$WORKTREE` and `$PR` (the helper emits shell-safe `KEY=VALUE` lines — don't hand-parse the drawer). If `cloude-task-info` exits non-zero — it returns 3 and names the missing key on stderr when `:PR:` / `:WORKTREE:` / `:BRANCH:` is absent — **bail immediately** (see Bail-out hygiene) with that stderr message as the note.
 
 Load `<worktree>/.cloude-babysit-merge-state.json` if it exists. If not, this is fresh — initialize:
 
@@ -58,7 +58,11 @@ Capture the relevant fields. We branch on these in step 5.
 
 The merge landed. Per CLAUDE.md, MERGING → COMPLETE is the one forward transition the agent is explicitly allowed to perform.
 
-- Edit `$CLOUDE_TASK_FILE`'s top-level heading: rewrite the line to TODO `COMPLETE`, tag `:user:`. Preserve the heading text. Strip any existing trailing `:tag:` chain so re-runs don't accrete tags.
+- Flip the heading to `COMPLETE :user:` with the shared helper:
+  ```
+  "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo COMPLETE --tag user
+  ```
+  It swaps the keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text.
 - Append a short line under `** Notes` recording the merge (e.g. `Merged at <mergedAt> as <mergeCommit short SHA>`).
 - Delete `<worktree>/.cloude-babysit-merge-state.json`.
 - Print:
@@ -72,7 +76,7 @@ The merge landed. Per CLAUDE.md, MERGING → COMPLETE is the one forward transit
 
 The PR was closed without merging. Unexpected during MERGING. Don't try to re-open or guess; surface it.
 
-- Edit `$CLOUDE_TASK_FILE`'s heading tag to `:user:` (keep TODO as MERGING; the user decides whether to /iterate or /drop).
+- Flip the heading tag to `:user:` with `"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --tag user` (passing only `--tag` keeps TODO as MERGING; the user decides whether to /iterate or /drop).
 - Append to `** Notes`: `babysit-merge: PR was CLOSED unexpectedly without merging. Investigate before next action.`
 - Delete the state file.
 - Print a summary line and end the turn.
@@ -87,7 +91,11 @@ Detect a "blocking" condition from the step-3 query. Any of these qualifies:
 
 When any of those is true:
 
-- Edit `$CLOUDE_TASK_FILE`'s heading: rewrite TODO `MERGING` → `ITERATING`, tag → `:user:`. Preserve heading text. Strip existing tag chain.
+- Flip the heading to `ITERATING :user:` with the shared helper:
+  ```
+  "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo ITERATING --tag user
+  ```
+  It swaps the keyword, replaces any existing trailing `:tag:` chain, and preserves the heading text.
 - Diagnose the specific blocker and append a short paragraph to `** Notes`. Examples:
   - *Merge blocked: required check `Build / unit-tests` is failing. See `<run-url>`. Address the failure and re-enter MERGING.*
   - *Merge blocked: reviewer @<login> requested changes. See review thread at `<review-url>`. Resolve the feedback and re-enter MERGING.*
@@ -129,7 +137,7 @@ When any of those is true:
 
 Whenever bailing for any reason (no `:PR:`, wall-clock exhausted, unrecoverable error not covered by 5b/5c/5d):
 
-1. Edit `$CLOUDE_TASK_FILE`'s top-level heading: tag → `:user:`. Don't touch TODO unless the specific bail-out explicitly says to (5a moves to COMPLETE; 5c moves to ITERATING; everything else keeps TODO as-is).
+1. Flip the heading tag to `:user:` with `"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --tag user`. Passing only `--tag` leaves the TODO keyword alone — don't touch it unless the specific bail-out explicitly says to (5a moves to COMPLETE; 5c moves to ITERATING; everything else keeps TODO as-is).
 2. Append a short note under `** Notes` explaining what bailed and why.
 3. If `watch_bash_id` is set and the bash is still running, kill it (don't leave orphans).
 4. Delete `<worktree>/.cloude-babysit-merge-state.json`.

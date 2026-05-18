@@ -8,13 +8,20 @@ This skill is mechanical; it does not enforce the "forward transitions out of PL
 
 ## 1. Read the task file
 
-Read `$CLOUDE_TASK_FILE`. Parse the top-level heading line (the `*`-prefixed line near the top) and extract:
+Load the task's metadata with the shared helper rather than hand-parsing the heading or properties drawer:
 
-- the **current TODO keyword** (the first whitespace-separated word after `*`)
-- the **heading text** (everything between the keyword and any trailing `:tag:` markers)
-- the **current tag(s)** (the `:foo:` markers, possibly multiple, possibly absent)
+```
+eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"
+```
 
-Also parse the properties drawer for `:WORKTREE:`, `:BRANCH:`, `:PR:` — these feed the DoD checks below.
+`cloude-task-info` emits shell-safe `KEY=VALUE` lines, so `eval` leaves these set:
+
+- `$TODO` — the current TODO keyword.
+- `$TAG` — the current who-has-the-ball tag (`agent` / `user` / `blocked`, or empty).
+- `$HEADING` — the heading text.
+- `$WORKTREE`, `$BRANCH`, `$PR` — properties-drawer fields that feed the DoD checks below (plus `$REPO`, `$ID`, and derived fields you can ignore here).
+
+If `cloude-task-info` exits non-zero it prints the problem on stderr (an unparseable file, or a missing required property — it names the key). Surface that to the user and stop rather than guessing.
 
 ## 2. Determine the next state
 
@@ -70,18 +77,20 @@ Default to **N** on any non-`y` response. If the user (or you, per the agent-dri
 
 ## 6. Perform the transition
 
-Edit `$CLOUDE_TASK_FILE`. Replace the top-level heading line:
+Flip the heading with the shared helper — don't hand-edit the line:
 
-- TODO keyword → `<NEXT_STATE>`
-- Heading tag → the per-stage default for `<NEXT_STATE>`, **unless** an `--tag <name>` was passed:
-  - `ITERATING → :agent:`
-  - `REVIEW → :blocked:`
-  - `MERGING → :agent:`
-  - `COMPLETE → :user:`
+```
+"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo <NEXT_STATE> --tag <new-tag>
+```
 
-Strip any existing trailing `:tag:` markers (one or more) before appending the new one, so re-runs don't accrete tags.
+`<new-tag>` is the per-stage default for `<NEXT_STATE>`, **unless** an `--tag <name>` was passed to `/advance` (then use that name):
 
-The rest of the heading (the heading text, any leading indentation) must be preserved exactly. Don't touch anything below the heading.
+- `ITERATING → agent`
+- `REVIEW → blocked`
+- `MERGING → agent`
+- `COMPLETE → user`
+
+The helper rewrites only the first heading: it swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag (so re-runs don't accrete tags), and preserves the heading text and everything below it.
 
 ## 7. Report and (if `:agent:`) continue working
 

@@ -5,7 +5,7 @@
 # ///
 # List promotable ideas from tasks/staging.org for /promote.
 #
-# Output (stdout):
+# Default output (stdout):
 #
 #   PROMOTABLE
 #   1) [project-heading] idea heading text  [ADOPT]
@@ -24,12 +24,23 @@
 #     it to print the one-line "(TODO-project ideas omitted)" notice
 #     without re-parsing the file.
 #
-# Exit 0 on success (including empty staging); exit 2 if the file
-# can't be parsed.
+# With --select N, instead emits the full record for the idea at
+# index N (same numbering as the listing) as shell-safe KEY=VALUE
+# lines, so /promote can `eval` it rather than re-parsing staging.org:
+#
+#   REPO=https://github.com/owner/repo
+#   HEADING=<exact idea heading text>
+#   MODE=<standard|adopt>
+#   PR_URL=<adopted PR url, or empty>
+#
+# Exit 0 on success (including empty staging); exit 2 on a usage
+# error, an out-of-range --select index, or a file that can't be
+# parsed.
 
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -52,8 +63,73 @@ CLOUDE_ROOT = Path(
 STAGING = CLOUDE_ROOT / "tasks" / "staging.org"
 
 
-def main() -> int:
+def _collect(root):
+    """Walk staging into a list of promotable idea records.
+
+    Returns (records, todo_projects) where each record is a dict with
+    keys: index (1-based, global), project, repo, title.
+    """
+    records = []
+    todo_projects = 0
+    n = 0
+    for project in root.children:
+        props = dict(project.properties) if project.properties else {}
+        if not props.get("REPO"):
+            todo_projects += 1
+            continue
+        project_name = str(project.heading).strip()
+        repo = props["REPO"].strip()
+        for idea in project.children:
+            n += 1
+            records.append(
+                {
+                    "index": n,
+                    "project": project_name,
+                    "repo": repo,
+                    "title": str(idea.heading).strip(),
+                }
+            )
+    return records, todo_projects
+
+
+def _emit(key: str, value: str) -> None:
+    print(f"{key}={shlex.quote(value)}")
+
+
+def main(argv: list[str]) -> int:
+    select = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--select":
+            i += 1
+            if i >= len(argv):
+                sys.stderr.write("cloude-list-staging: --select needs an index\n")
+                return 2
+            try:
+                select = int(argv[i])
+            except ValueError:
+                sys.stderr.write(
+                    f"cloude-list-staging: --select index must be an integer, "
+                    f"got {argv[i]!r}\n"
+                )
+                return 2
+        elif arg in ("-h", "--help"):
+            sys.stdout.write(
+                "usage: cloude-list-staging [--select N]\n"
+            )
+            return 0
+        else:
+            sys.stderr.write(f"cloude-list-staging: unexpected argument: {arg}\n")
+            return 2
+        i += 1
+
     if not STAGING.exists():
+        if select is not None:
+            sys.stderr.write(
+                f"cloude-list-staging: no staging file at {STAGING}\n"
+            )
+            return 2
         print("PROMOTABLE")
         print("TODO_PROJECTS 0")
         return 0
@@ -63,23 +139,31 @@ def main() -> int:
         sys.stderr.write(f"cloude-list-staging: failed to parse {STAGING}: {exc}\n")
         return 2
 
+    records, todo_projects = _collect(root)
+
+    if select is not None:
+        match = next((r for r in records if r["index"] == select), None)
+        if match is None:
+            sys.stderr.write(
+                f"cloude-list-staging: --select {select} is out of range "
+                f"(1..{len(records)})\n"
+            )
+            return 2
+        title = match["title"]
+        is_adopt = title.startswith("ADOPT ")
+        _emit("REPO", match["repo"])
+        _emit("HEADING", title)
+        _emit("MODE", "adopt" if is_adopt else "standard")
+        _emit("PR_URL", title[len("ADOPT ") :].strip() if is_adopt else "")
+        return 0
+
     print("PROMOTABLE")
-    n = 0
-    todo_projects = 0
-    for project in root.children:
-        props = dict(project.properties) if project.properties else {}
-        if not props.get("REPO"):
-            todo_projects += 1
-            continue
-        project_name = str(project.heading).strip()
-        for idea in project.children:
-            n += 1
-            idea_title = str(idea.heading).strip()
-            suffix = "  [ADOPT]" if idea_title.startswith("ADOPT ") else ""
-            print(f"{n}) [{project_name}] {idea_title}{suffix}")
+    for r in records:
+        suffix = "  [ADOPT]" if r["title"].startswith("ADOPT ") else ""
+        print(f"{r['index']}) [{r['project']}] {r['title']}{suffix}")
     print(f"TODO_PROJECTS {todo_projects}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

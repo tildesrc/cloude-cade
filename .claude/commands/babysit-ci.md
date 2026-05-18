@@ -24,7 +24,7 @@ This skill only edits the worktree (the cloude repo is mounted read-only inside 
 
 ## 1. Read inputs
 
-From `$CLOUDE_TASK_FILE` properties drawer: `:WORKTREE:`, `:PR:`. If `:PR:` is missing or unset, **bail immediately** (see Bail-out hygiene below) with note "no :PR: in task file".
+Run `eval "$( "$CLOUDE_ROOT/bin/cloude-task-info" "$CLOUDE_TASK_FILE" )"` to load `$WORKTREE` and `$PR` (the helper emits shell-safe `KEY=VALUE` lines — don't hand-parse the drawer). If `cloude-task-info` exits non-zero — it returns 3 and names the missing key on stderr when `:PR:` / `:WORKTREE:` / `:BRANCH:` is absent — **bail immediately** (see Bail-out hygiene below) with that stderr message as the note.
 
 Load `<worktree>/.cloude-babysit-state.json` if it exists. If not, this is a fresh start — initialize:
 
@@ -67,7 +67,11 @@ Otherwise branch on CI status:
 
 If no failing checks (and at least one passing), the agent's autonomous work is done. The next move — actually advancing the stage — is the user's call.
 
-- Edit `$CLOUDE_TASK_FILE`'s top-level heading: replace any trailing `:tag:` markers (`:agent:` typically; could be a chain) with `:user:`. Preserve the TODO keyword (still `ITERATING`, or whatever stage you were running under) and the heading text exactly. This signals that nothing more is happening autonomously and the user should look at the result and decide whether to `/advance`.
+- Flip the heading tag to `:user:` with the shared helper (pass only `--tag`, so the TODO keyword and heading text are preserved):
+  ```
+  "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --tag user
+  ```
+  This signals that nothing more is happening autonomously and the user should look at the result and decide whether to `/advance`.
 - Delete `<worktree>/.cloude-babysit-state.json`.
 - Print:
   ```
@@ -148,7 +152,7 @@ End the turn. **Do not call `ScheduleWakeup`. Do not call any other tools.** The
 
 Whenever bailing for any reason (no `:PR:`, wall-clock exhausted, per-check retries exceeded, unrecoverable error):
 
-1. Edit `$CLOUDE_TASK_FILE`'s top-level heading line: flip the tag to `:user:` (preserve TODO keyword and heading text). Append a short note to the `** Notes` section explaining what bailed and why.
+1. Flip the heading tag to `:user:` with `"$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --tag user` (passing only `--tag` preserves the TODO keyword and heading text). Append a short note to the `** Notes` section explaining what bailed and why.
 2. If `watch_bash_id` is set and the bash is still running: kill it via the appropriate tool (or `kill <pid>` if you have it). Don't leave orphans.
 3. Delete `<worktree>/.cloude-babysit-state.json`.
 4. Print a one-paragraph summary so a glance at the conversation makes it clear what happened.
