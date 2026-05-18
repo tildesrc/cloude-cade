@@ -115,22 +115,23 @@ and clean them up when they land.
 
 Here it is on a typical day — every task on one screen, ranked by
 stage, each tagged with who currently has the ball — `:agent:`,
-`:user:`, or `:blocked:` (the live TUI colour-codes the tag too):
+`:user:`, or `:blocked:` (the live TUI colour-codes the tag too) — and
+labelled with the repo it belongs to:
 
 ```text
 cloude tasks                 ↑/↓ move  p open PR  t tmux  r reload  q quit
 
 ACTIVE (4)
-  MERGING   :agent:    Cache the dashboard customer lookup         PR #312
-  REVIEW    :blocked:  Add rate-limit headers to the API           PR #305
-> ITERATING :user:     Create a quickstart guide for cloude        PR #298
-  PLANNING  :user:     Migrate the billing cron job                PR #314
+  MERGING   :agent:    Cache the dashboard customer lookup Acme Webapp  PR #312
+  REVIEW    :blocked:  Add rate-limit headers to the API      Acme API  PR #305
+> ITERATING :user:     Create a quickstart guide for cloude     Cloude  PR #298
+  PLANNING  :user:     Migrate the billing cron job            Billing  PR #314
 STAGING (2)
-  —                    Retry webhook deliveries with backoff
-  —                    Drop the legacy /v1 search endpoint
+  —                    Retry webhook deliveries with backoff  Acme API
+  —                    Drop the legacy /v1 search endpoint    Acme API
 RECENT (2)
-  COMPLETE  2026-05-14  fix-flaky-auth-retry-test
-  DROPPED   2026-05-12  prototype-graphql-gateway
+  COMPLETE  2026-05-14  fix-flaky-auth-retry-test               Cloude
+  DROPPED   2026-05-12  prototype-graphql-gateway          Acme Webapp
 ```
 
 The `:user:` rows are the point — the tasks that need feedback right
@@ -333,8 +334,9 @@ renders the following sections:
 - **ACTIVE** — one row per file in `tasks/active/`, sorted by stage
   priority (`MERGING` first, then `REVIEW`, `ITERATING`, `PLANNING`).
   Each row shows the TODO keyword, who currently has the ball
-  (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading, and
-  the PR number from the `:PR:` property.
+  (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading,
+  then a right-aligned repo label and the PR number from the `:PR:`
+  property.
 - **STAGING** — idea sub-headings under top-level projects that have a
   `:REPO:` property (i.e. promotable via `/promote`).
 - **One section per TODO keyword** for idea sub-headings under
@@ -347,6 +349,16 @@ renders the following sections:
   promotable.
 - **RECENT** — the 20 most-recently-touched files from
   `tasks/completed/` and `tasks/dropped/`.
+
+ACTIVE, STAGING, and RECENT rows are labelled with the repo the task
+belongs to, shown right-aligned just left of the PR number. The label
+is the **`staging.org` project section header** — the human name of
+the top-level project the task's `:REPO:` URL belongs to. The
+dashboard inverts the staging projects' `:REPO:` properties into a
+URL → header map, so an active or recent task carrying the same
+`:REPO:` URL is shown under its project's name. A task whose `:REPO:`
+matches no staging project falls back to an `owner/repo` label.
+Personal-TODO rows (non-repo projects) carry no repo label.
 
 Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `p` opens
 the highlighted task's PR in the default browser, `t` switches to its
