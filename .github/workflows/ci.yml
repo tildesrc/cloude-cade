@@ -1,0 +1,38 @@
+name: CI
+
+# Runs the workflow test suite (make test) and the generated-artifact
+# drift guard (make render-check) on every PR and on pushes to master.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python 3.11 matches the cloude container (node:20-bookworm) and
+      # is the minimum the workflow tooling needs — tomllib is stdlib
+      # from 3.11, and bin/cloude-render runs on plain `python3`.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # uv runs the test suite (`make test` → uv run --with pytest …),
+      # the same way the helper scripts and `make test` expect locally.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Fail if CLAUDE.md or tasks/TEMPLATE.org are out of date with
+      # respect to the active workflow definition (workflows/).
+      - name: Check generated artifacts are up to date
+        run: make render-check
+
+      - name: Run the workflow test suite
+        run: make test
