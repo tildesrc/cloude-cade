@@ -107,6 +107,9 @@ is mechanical and won't enforce it.
 - Implement any additional user requests or feedback.
 - Implement any review comments the user has approved for
   implementation.
+- Update the PR title and description on GitHub so they describe the
+  change as implemented, replacing the placeholder text the draft PR
+  was opened with.
 
 **Definition of done**
 - The plan is implemented in code.
@@ -115,6 +118,8 @@ is mechanical and won't enforce it.
 - Changes are committed and pushed.
 - CI tests are passing, or any failures can be attributed to
   irrelevant flakes.
+- The PR title and description on GitHub reflect the final change
+  (not the draft-PR placeholder).
 
 #### REVIEW
 
