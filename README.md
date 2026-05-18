@@ -482,6 +482,14 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   dashboard honest about which tasks are actually still being worked
   vs. waiting on the user.
 
+`cloude-on-user-prompt` and `cloude-on-stop` both read the task
+heading (TODO keyword + tag) to decide whether to act; that parsing
+is shared in `bin/cloude_org.py`. Unlike the org-reading helper
+scripts, the hooks deliberately *don't* use `orgparse`: Claude Code's
+hook runner executes them on plain stdlib `python3`, not through
+`uv`, so a third-party import would fail — and a one-line heading
+grammar is well within reach of a regex anyway.
+
 The settings file is baked into the image (Dockerfile `COPY
 docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced
 to the in-container `claude` via `--settings

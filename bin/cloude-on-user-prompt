@@ -35,14 +35,18 @@ in by passing `--settings /etc/cloude/settings.json` to claude.
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
+# The heading parser is shared with bin/cloude-on-stop; both hooks run
+# on plain stdlib python3, so it lives in a sibling module rather than
+# orgparse (see cloude_org.py for the full rationale).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import ball_tag, parse_heading  # noqa: E402
+
 # In-flight stages — the terminal COMPLETE / DROPPED states are skipped.
 IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
-BALL_TAGS = ("agent", "user", "blocked")
 
 
 def main() -> int:
@@ -60,8 +64,8 @@ def main() -> int:
     if parsed is None:
         return 0
 
-    state, ball_tag = parsed
-    if state not in IN_FLIGHT or ball_tag != "user":
+    state, tags = parsed
+    if state not in IN_FLIGHT or ball_tag(tags) != "user":
         return 0
 
     if flip_to_agent(task):
@@ -70,27 +74,6 @@ def main() -> int:
             f":user: -> :agent: ({state})."
         )
     return 0
-
-
-def parse_heading(content: str) -> tuple[str, str] | None:
-    """Find the first top-level heading; return (TODO keyword, ball tag).
-
-    The ball tag is the first of agent/user/blocked found in the
-    trailing org-tag chain (`:foo:bar:`), or '' if none. The non-greedy
-    `(.*?)` for the heading text ensures embedded colon-words in the
-    title are not mistaken for the tag chain — only the trailing chain
-    matches `\\s*$`.
-    """
-    m = re.search(
-        r"^\*\s+(\S+)\s+(.*?)\s*(?::([A-Za-z0-9_@:]+):)?\s*$",
-        content,
-        re.M,
-    )
-    if not m:
-        return None
-    parts = [t for t in (m.group(3) or "").split(":") if t]
-    ball_tag = next((t for t in BALL_TAGS if t in parts), "")
-    return m.group(1), ball_tag
 
 
 def flip_to_agent(task: str) -> bool:
