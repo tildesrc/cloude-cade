@@ -11,6 +11,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLOUDE_ROOT/bin/cloude-on-user-prompt"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

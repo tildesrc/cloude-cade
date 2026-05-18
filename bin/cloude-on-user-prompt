@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit hook handler — mark the task `:agent:` when work resumes.
+
+Fires at the start of every agent turn (when the user submits a
+prompt). If the in-container task is in an in-flight stage (PLANNING /
+ITERATING / REVIEW / MERGING) with the heading tag `:user:`, flips it
+to `:agent:`: the user has just handed the ball back, so the agent is
+now the one working.
+
+This is the entry-direction counterpart to `bin/cloude-on-stop`, which
+handles the reverse (`:agent:` -> `:user:` / `:blocked:`) when a turn
+ends. Together they keep the heading tag — and therefore the
+`bin/cloude-dash` dashboard — honest about who currently has the ball,
+without the agent or user hand-editing the heading.
+
+Why this matters most for PLANNING: a task is *born* `PLANNING :user:`
+and nothing else ever transitions *into* PLANNING, so without this
+hook its `:agent:` is never set. Planning turns can be long (research,
+exploration); during one the dashboard should show `:agent:` so the
+user knows the task is progressing on its own.
+
+Only flips when:
+  - $CLOUDE_TASK_FILE is set and points to an existing file
+  - the heading's current TODO keyword is PLANNING / ITERATING /
+    REVIEW / MERGING (terminal states are left alone)
+  - the heading's who-has-the-ball tag is exactly `user` (`:agent:`
+    is already correct; `:blocked:` was set deliberately and must
+    not be silently cleared by a stray prompt)
+Other cases are silent no-ops. The hook never blocks a prompt — it
+always exits 0.
+
+Registered via /etc/cloude/settings.json, which bin/cloude-run wires
+in by passing `--settings /etc/cloude/settings.json` to claude.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# The heading parser is shared with bin/cloude-on-stop; both hooks run
+# on plain stdlib python3, so it lives in a sibling module rather than
+# orgparse (see cloude_org.py for the full rationale).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import ball_tag, parse_heading  # noqa: E402
+
+# In-flight stages — the terminal COMPLETE / DROPPED states are skipped.
+IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+
+
+def main() -> int:
+    # Drain stdin (UserPromptSubmit passes JSON) but we need nothing from it.
+    try:
+        json.load(sys.stdin)
+    except (ValueError, AttributeError):
+        pass
+
+    task = os.environ.get("CLOUDE_TASK_FILE")
+    if not task or not Path(task).is_file():
+        return 0
+
+    parsed = parse_heading(Path(task).read_text())
+    if parsed is None:
+        return 0
+
+    state, tags = parsed
+    if state not in IN_FLIGHT or ball_tag(tags) != "user":
+        return 0
+
+    if flip_to_agent(task):
+        print(
+            f"[cloude] Task picked up — heading tag flipped "
+            f":user: -> :agent: ({state})."
+        )
+    return 0
+
+
+def flip_to_agent(task: str) -> bool:
+    """Flip the heading tag to `:agent:` via the shared set-state helper.
+
+    Keeps the structural heading rewrite in `cloude-task-set-state`, its
+    one canonical home. The helper is a sibling of this script, so it's
+    located relative to __file__ with no dependency on $CLOUDE_ROOT.
+    Returns True on success; on failure warns to stderr and returns
+    False (the prompt is never blocked).
+    """
+    helper = Path(__file__).resolve().with_name("cloude-task-set-state")
+    try:
+        subprocess.run(
+            [sys.executable, str(helper), task, "--tag", "agent"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        sys.stderr.write(f"cloude-on-user-prompt: tag flip failed: {detail}\n")
+        return False
+
+
+if __name__ == "__main__":
+    sys.exit(main())

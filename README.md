@@ -170,8 +170,9 @@ See [Dashboard](#dashboard) for the full key list.
    in `PLANNING :user:` — waiting for you.
 3. **Plan.** Attach to the task's tmux session (`tmux attach -t
    cloude-<slug>`, or press `t` on the dashboard) and give the agent a
-   planning prompt. When you approve its plan, a hook flips the task to
-   `ITERATING` automatically.
+   planning prompt — a hook flips the task to `:agent:` so the
+   dashboard shows it's now progressing on its own. When you approve
+   its plan, another hook flips the task to `ITERATING` automatically.
 4. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
    watches CI after each push. When a stage's work is done the agent
    flips its tag to `:user:` — that's your cue to run `/advance` to move
@@ -501,15 +502,34 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   writes the accepted plan into the task file's `** Plan` section and
   flips the heading to `ITERATING :agent:`. Lets the agent start
   implementing on its next turn without a separate `/advance` step.
+- **`UserPromptSubmit` → `bin/cloude-on-user-prompt`.** Fires at the
+  start of every agent turn. If the task is in an in-flight stage
+  (PLANNING / ITERATING / REVIEW / MERGING) with tag `:user:`, flips
+  it to `:agent:` — the user has just handed the ball back, so the
+  agent is now the one working. Matters most for `PLANNING`, which is
+  *born* `:user:` and has no other transition into it: without this
+  hook a long planning turn would show a stale `:user:` on the
+  dashboard the whole time. `:blocked:` is left untouched (set
+  deliberately, not cleared by a stray prompt) and the hook never
+  blocks a prompt.
 - **`Stop` → `bin/cloude-on-stop`.** Fires at the end of every agent
   turn. If the task is in an in-flight stage (PLANNING / ITERATING /
   REVIEW / MERGING) with tag `:agent:`, blocks the stop once and
   reminds the agent of that stage's Definition of Done plus the
   available tag-flipping outcomes (`:user:` / `:blocked:` / keep
   `:agent:` and continue). Honors `stop_hook_active` to block only
-  once per stop cycle. Keeps the `bin/cloude-dash` dashboard honest
-  about which tasks are actually still being worked vs. waiting on
-  the user.
+  once per stop cycle. The entry-direction counterpart to
+  `cloude-on-user-prompt`; together they keep the `bin/cloude-dash`
+  dashboard honest about which tasks are actually still being worked
+  vs. waiting on the user.
+
+`cloude-on-user-prompt` and `cloude-on-stop` both read the task
+heading (TODO keyword + tag) to decide whether to act; that parsing
+is shared in `bin/cloude_org.py`. Unlike the org-reading helper
+scripts, the hooks deliberately *don't* use `orgparse`: Claude Code's
+hook runner executes them on plain stdlib `python3`, not through
+`uv`, so a third-party import would fail — and a one-line heading
+grammar is well within reach of a regex anyway.
 
 The settings file is baked into the image (Dockerfile `COPY
 docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced

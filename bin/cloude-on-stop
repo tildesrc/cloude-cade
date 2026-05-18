@@ -32,9 +32,14 @@ The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
+
+# The heading parser is shared with bin/cloude-on-user-prompt; both
+# hooks run on plain stdlib python3, so it lives in a sibling module
+# rather than orgparse (see cloude_org.py for the full rationale).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import parse_heading  # noqa: E402
 
 
 DOD = {
@@ -83,25 +88,6 @@ def main() -> int:
 
     print(json.dumps({"decision": "block", "reason": build_reason(state)}))
     return 0
-
-
-def parse_heading(content: str) -> tuple[str, list[str]] | None:
-    """Find the first top-level heading; return (TODO keyword, [tag names]).
-
-    Tag names are split from a trailing org-tag chain (`:foo:bar:`). The
-    non-greedy `(.*?)` for the heading text ensures embedded colon-words
-    in the title (e.g. ":user:" appearing mid-title) are not mistaken
-    for the tag chain — only the trailing chain matches `\\s*$`.
-    """
-    m = re.search(
-        r"^\*\s+(\S+)\s+(.*?)\s*(?::([A-Za-z0-9_@:]+):)?\s*$",
-        content,
-        re.M,
-    )
-    if not m:
-        return None
-    tag_chain = m.group(3) or ""
-    return m.group(1), [t for t in tag_chain.split(":") if t]
 
 
 def build_reason(state: str) -> str:
