@@ -75,6 +75,7 @@ flowchart TD
     PLANNING -->|"approved"| ITERATING
     ITERATING -->|"/advance"| REVIEW
     REVIEW -->|"/advance"| MERGING
+    ITERATING -->|"/advance · :SKIP_REVIEW: repo"| MERGING
     MERGING -->|"/babysit-merge"| COMPLETE
     COMPLETE -->|"/sweep"| CLEANUP
 
@@ -90,7 +91,10 @@ from the **host side** — capturing ideas, promoting, and cleaning
 up — while each task's agent runs in its **own container and tmux
 session**. Forward
 transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are user-driven;
-only `MERGING → COMPLETE` advances on its own.
+only `MERGING → COMPLETE` advances on its own. Repos that opt out of
+peer review (`:SKIP_REVIEW: t`, see [Workflow states](#workflow-states))
+skip `REVIEW` — `/advance` takes the task straight from `ITERATING` to
+`MERGING`.
 
 ### The host side
 
@@ -218,7 +222,7 @@ tasks/
 | State        | Meaning                                                                      | Can move to                  |
 | ------------ | ---------------------------------------------------------------------------- | ---------------------------- |
 | `PLANNING`   | Claude is planning the work.                                                  | `ITERATING`, `DROPPED`       |
-| `ITERATING`  | Claude is writing code, running tests, updating the PR title/description, waiting on CI. | `REVIEW`, `DROPPED`          |
+| `ITERATING`  | Claude is writing code, running tests, updating the PR title/description, waiting on CI. | `REVIEW` (or `MERGING`, see below), `DROPPED` |
 | `REVIEW`     | PR is open for peer review, waiting on comments.                              | `ITERATING`, `MERGING`, `DROPPED` |
 | `MERGING`    | PR is approved and ready to merge.                                            | `COMPLETE`, `DROPPED`        |
 | `COMPLETE`   | PR is merged. Terminal.                                                       | —                            |
@@ -228,6 +232,13 @@ Forward transitions out of `PLANNING`, `ITERATING`, and `REVIEW` are
 **user-driven only** — the agent does not advance these states on its
 own; it must wait for the user to make the call. Any state can transition
 to `DROPPED` at any time.
+
+**Skipping peer review.** A repo can opt out of peer review. When a
+task's properties drawer carries `:SKIP_REVIEW: t` (copied from its
+staging project — see [staging.org structure](#stagingorg-structure)),
+`/advance` skips the `REVIEW` stage and moves the task straight from
+`ITERATING` to `MERGING`. The `REVIEW` keyword still exists; it's simply
+never entered for such tasks.
 
 ### Who-has-the-ball tag
 
@@ -268,6 +279,22 @@ open a branch in. Ideas live as sub-headings under their project:
 ** Hook to auto-move COMPLETE files
 ```
 
+A project may also carry an optional `:SKIP_REVIEW: t` property. It
+marks a repo that doesn't require peer review: `/promote` copies it
+into every task file promoted from that project (the same way `:REPO:`
+travels), and `/advance` then skips the `REVIEW` stage for those tasks
+(see [Workflow states](#workflow-states)). Omit it for repos that do
+require review — that's the default.
+
+```org
+* cloude-cade
+  :PROPERTIES:
+  :REPO: https://github.com/<org>/cloude-cade
+  :SKIP_REVIEW: t
+  :END:
+** Add a task-promotion script
+```
+
 A top-level heading **without** `:REPO:` is treated as a **TODO
 project** — its sub-headings are personal TODOs the user works on
 themselves, not promotable agent-driven tasks. On the dashboard each
@@ -298,14 +325,16 @@ with the metadata needed to act on the task without hunting:
 | `:PR:`           | Pull request URL once the draft PR exists.                      |
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
+| `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
 | `:COMPANION_PR:` | *(optional)* URL of a related PR this task pairs with — e.g., an acme-webapp companion to an acme-service PR. Used when work spans two PRs that should land together. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
 the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
-whenever an agent is attached). `:ADOPTED:` and `:COMPANION_PR:` are
-set by `/promote` when the situation applies; they're omitted on
-ordinary tasks.
+whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
+`:COMPANION_PR:` are set by `/promote` when the situation applies
+(`:SKIP_REVIEW:` whenever the staging project carries it); they're
+omitted on ordinary tasks.
 
 ### Lifecycle
 
@@ -514,9 +543,15 @@ commands:
   Source clones are kept in `repos/<repo-name>` (auto-cloned on first
   use); worktrees share that clone's git object store. Both `repos/`
   and `worktrees/` are gitignored.
+
+  If the staging project carries `:SKIP_REVIEW: t`, `/promote` copies
+  that property into the new task file's properties drawer so the
+  repo's peer-review opt-out travels with the task.
 - **`/advance`** *(in-container)* — Advance the task's TODO keyword
   forward to the next workflow stage (`PLANNING → ITERATING →
-  REVIEW → MERGING → COMPLETE`). Loads the current stage's
+  REVIEW → MERGING → COMPLETE`, or `ITERATING → MERGING` directly
+  when the task's `:SKIP_REVIEW:` property is set — see [Workflow
+  states](#workflow-states)). Loads the current stage's
   Definition of Done from `CLAUDE.md`, evaluates each item
   (programmatically where it can — PR exists, CI status, git
   clean — and via the agent's judgment for the rest), and
@@ -600,9 +635,11 @@ dependency, and runs on plain `python3`.
   `tasks/staging.org` numbered globally, plus a trailing
   `TODO_PROJECTS <n>` count of personal-TODO projects (no `:REPO:`)
   that `/promote` skips. With `--select N`, instead emits the chosen
-  idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`) as
-  shell-safe `KEY=VALUE` lines, so `/promote` can `eval` it rather
-  than re-parsing staging.org. Used by `/promote` step 1.
+  idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
+  `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines, so `/promote` can
+  `eval` it rather than re-parsing staging.org. (`SKIP_REVIEW` carries
+  the project heading's optional `:SKIP_REVIEW:` property.) Used by
+  `/promote` step 1.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -613,7 +650,7 @@ dependency, and runs on plain `python3`.
 - **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
   lines for the heading TODO/tag/text, the properties drawer
   (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `COMPANION_PR` when present), and derived fields (`SLUG`,
+  `SKIP_REVIEW` / `COMPANION_PR` when present), and derived fields (`SLUG`,
   `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
   `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`

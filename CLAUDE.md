@@ -25,7 +25,10 @@ All task tracking lives under `tasks/`:
 - `tasks/staging.org` — captures not yet started, organized under
   top-level *project* headings. Each project carries a `:REPO:`
   property identifying its GitHub repo; that property travels with the
-  task into the active file when it's promoted.
+  task into the active file when it's promoted. A project may also
+  carry an optional `:SKIP_REVIEW: t` property — it travels into the
+  active file the same way and tells `/advance` to skip the `REVIEW`
+  stage (see Workflow states).
 - `tasks/active/YYYY-MM-DD-<slug>.org` — one file per in-flight task.
 - `tasks/completed/YYYY-MM-DD-<slug>.org` — one file per merged task.
 - `tasks/dropped/YYYY-MM-DD-<slug>.org` — one file per abandoned task.
@@ -48,6 +51,12 @@ Rules when working on a task:
 
 The TODO keywords are: `PLANNING`, `ITERATING`, `REVIEW`, `MERGING`,
 `COMPLETE`, `DROPPED`.
+
+Repos that opt out of peer review skip the `REVIEW` stage entirely. A
+task whose properties drawer has `:SKIP_REVIEW: t` advances straight
+from `ITERATING` to `MERGING` — `/advance` consults the property and
+bypasses `REVIEW`. The `REVIEW` keyword still exists; it's simply never
+entered for such tasks.
 
 **On every new session, read your task file first.** When running
 inside a container, the absolute path is in the `CLOUDE_TASK_FILE`
@@ -122,6 +131,9 @@ is mechanical and won't enforce it.
   (not the draft-PR placeholder).
 
 #### REVIEW
+
+Skipped entirely for tasks with `:SKIP_REVIEW: t` — `/advance` goes
+`ITERATING → MERGING` and this stage is never entered.
 
 **Responsibilities**
 - Wait for review or approval of the PR.

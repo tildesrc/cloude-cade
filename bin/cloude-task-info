@@ -10,7 +10,7 @@
 # Keys emitted (always; empty if unknown):
 #   TODO, TAG, HEADING
 # From the properties drawer:
-#   WORKTREE, BRANCH, PR, REPO, ID, ADOPTED, COMPANION_PR
+#   WORKTREE, BRANCH, PR, REPO, ID, ADOPTED, SKIP_REVIEW, COMPANION_PR
 # Derived:
 #   SLUG          — filename minus YYYY-MM-DD- prefix and .org suffix
 #   REPO_NAME     — basename(dirname(WORKTREE))
@@ -43,7 +43,7 @@ except ModuleNotFoundError:
 
 
 REQUIRED = ("WORKTREE", "BRANCH", "PR")
-OPTIONAL = ("REPO", "ID", "ADOPTED", "COMPANION_PR")
+OPTIONAL = ("REPO", "ID", "ADOPTED", "SKIP_REVIEW", "COMPANION_PR")
 BALL_TAGS = ("agent", "user", "blocked")
 
 
