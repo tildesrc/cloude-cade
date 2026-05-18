@@ -53,7 +53,7 @@ Some items can be checked programmatically; others need your judgment:
   - "New and relevant tests pass locally" — judgment based on what you've actually run this session.
   - "Changes are committed and pushed" — `git -C <worktree> status` should be clean (or only have untracked unrelated files), and `git -C <worktree> log @{u}..HEAD` should be empty (nothing ahead of upstream).
   - "CI tests are passing, or any failures can be attributed to irrelevant flakes" — `gh pr checks <pr-url>` for the PR. Surface the failing checks if any.
-  - "The PR title and description on GitHub reflect the final change" — `gh pr view <pr-url> --json title,body`. Flag it as unmet if the title is still the bare staging-idea heading or the body still contains the `Draft PR for task … Plan to follow.` placeholder `cloude-promote-setup` opened the draft PR with.
+  - "The PR title and description on GitHub reflect the final change" — `gh pr view <pr-url> --json title,body`. Flag it as unmet if the title is still the bare staging-idea heading or the body still contains the `Draft PR for task … Plan to follow.` placeholder `cloude-promote-setup` opened the draft PR with. Also flag it as unmet if the body contains a "Test Plan", "Verification", or equivalent test-steps heading — those notes belong in the task's org file, not the PR description.
 - **REVIEW**
   - "The PR has been reviewed" — `gh pr view <pr-url> --json reviews -q '[.reviews[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | length'` > 0, or the user has decided to skip review (judgment).
 - **MERGING**
