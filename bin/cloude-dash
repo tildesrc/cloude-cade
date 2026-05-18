@@ -21,6 +21,7 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     import orgparse
@@ -63,6 +64,8 @@ class Task:
     tag: str            # "agent" / "user" / "blocked" / ""
     title: str
     pr_url: str | None
+    repo: str | None    # raw :REPO: URL at load; rewritten to the
+                        # staging.org project header by load_tasks()
     path: Path
     mtime: float
 
@@ -91,33 +94,45 @@ def _load_single_task_file(path: Path, section: str) -> Task | None:
         tag=_ball_tag(h.tags),
         title=str(h.heading).strip(),
         pr_url=pr if pr else None,
+        repo=props.get("REPO") or None,
         path=path,
         mtime=path.stat().st_mtime,
     )
 
 
-def _load_staging(path: Path) -> tuple[list[Task], dict[str, list[Task]]]:
-    """Split staging children into (staging, todo_sections).
+def _load_staging(
+    path: Path,
+) -> tuple[list[Task], dict[str, list[Task]], dict[str, str]]:
+    """Split staging children into (staging, todo_sections, repo_names).
 
     Projects with a `:REPO:` property hold promotable ideas, which go
     into `staging`. Projects without `:REPO:` hold personal todos; we
     bucket their entries by org TODO keyword (`DONE`, `WAITING`, …)
     so the dashboard can render a section header per keyword. Entries
     that have no TODO keyword fall back to a default `TODO` bucket.
+
+    `repo_names` maps each project's `:REPO:` URL (normalized via
+    `_repo_key`) to that project's heading text, so any task carrying
+    the same `:REPO:` URL can be labelled with the human-named project
+    header on the dashboard.
     """
     if not path.exists():
-        return [], {}
+        return [], {}, {}
     try:
         root = orgparse.load(str(path))
     except Exception:
-        return [], {}
+        return [], {}, {}
     staging: list[Task] = []
     todo_sections: dict[str, list[Task]] = {}
+    repo_names: dict[str, str] = {}
     mtime = path.stat().st_mtime
     for project in root.children:
         props = dict(project.properties) if project.properties else {}
-        is_promotable = bool(props.get("REPO"))
+        repo_url = props.get("REPO") or None
+        is_promotable = bool(repo_url)
         project_name = str(project.heading).strip()
+        if repo_url:
+            repo_names.setdefault(_repo_key(repo_url), project_name)
         for idea in project.children:
             idea_title = str(idea.heading).strip()
             tag = _ball_tag(idea.tags)
@@ -129,6 +144,7 @@ def _load_staging(path: Path) -> tuple[list[Task], dict[str, list[Task]]]:
                         tag=tag,
                         title=idea_title,
                         pr_url=None,
+                        repo=repo_url,
                         path=path,
                         mtime=mtime,
                     )
@@ -146,22 +162,60 @@ def _load_staging(path: Path) -> tuple[list[Task], dict[str, list[Task]]]:
                         tag=tag,
                         title=title,
                         pr_url=None,
+                        repo=None,
                         path=path,
                         mtime=mtime,
                     )
                 )
-    return staging, todo_sections
+    return staging, todo_sections, repo_names
+
+
+def _repo_path(url: str) -> str:
+    """Reduce a repo URL/identifier to its 'owner/repo' path.
+
+    The `https://github.com/owner/repo` form (and any other scheme) is
+    parsed with `urllib.parse.urlsplit`, which yields the host-less
+    path directly. The scp-like SSH form `git@github.com:owner/repo`
+    is not a real URL, so it is first promoted to an `ssh://` URL so
+    the same parser handles it. A trailing slash and a `.git` suffix
+    are trimmed; a bare `owner/repo` passes through. Case is preserved
+    — this feeds the human-facing fallback label.
+    """
+    s = url.strip()
+    if "://" not in s and "@" in s:
+        # scp-like SSH (git@host:owner/repo): promote to a proper
+        # ssh:// URL by turning the host/path ':' into a '/'.
+        s = "ssh://" + s.replace(":", "/", 1)
+    path = urlsplit(s).path.strip("/")
+    return path.removesuffix(".git")
+
+
+def _repo_key(url: str) -> str:
+    """Canonical, case-folded lookup key for matching a repo URL across
+    its https / SSH / .git-suffixed forms."""
+    return _repo_path(url).lower()
+
+
+def _repo_label(url: str | None, repo_names: dict[str, str]) -> str:
+    """Display label for a task's repo: the staging.org project header
+    when the URL matches a known project, else an `owner/repo` fallback
+    so the row still shows something useful."""
+    if not url:
+        return ""
+    return repo_names.get(_repo_key(url)) or _repo_path(url)
 
 
 def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
+    # Load staging first: it yields the repo-URL -> project-header map
+    # used to label every other task's :REPO: URL below.
+    staging, todo_sections, repo_names = _load_staging(TASKS / "staging.org")
+
     active: list[Task] = []
     for p in sorted((TASKS / "active").glob("*.org")):
         t = _load_single_task_file(p, ACTIVE)
         if t:
             active.append(t)
     active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
-
-    staging, todo_sections = _load_staging(TASKS / "staging.org")
 
     recent: list[Task] = []
     for sub, label in (("completed", "COMPLETE"), ("dropped", "DROPPED")):
@@ -176,6 +230,11 @@ def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
                 recent.append(t)
     recent.sort(key=lambda t: t.mtime, reverse=True)
     recent = recent[:RECENT_LIMIT]
+
+    # Rewrite each task's raw :REPO: URL to its staging.org project
+    # header (todo_sections rows carry no repo and are left alone).
+    for t in (*active, *staging, *recent):
+        t.repo = _repo_label(t.repo, repo_names)
 
     return {
         ACTIVE: active,
@@ -311,15 +370,20 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
             attr = curses.A_REVERSE if i == selected else 0
             state = (t.state or "—").ljust(9)
             tag = f":{t.tag}:".ljust(10) if t.tag else "".ljust(10)
+            repo = t.repo or ""
             if t.section == RECENT:
                 date = _date_from_filename(t.path)
                 slug = _slug_from_filename(t.path)
                 line = f"{marker} {state} {date}  {slug}"
+                right = repo
             else:
                 line = f"{marker} {state} {tag} {t.title}"
-                pr = _pr_number(t.pr_url)
-                pad = max(1, w - 1 - len(line) - len(pr))
-                line = line + (" " * pad) + pr
+                # Right margin: project header then PR number, two
+                # spaces apart; either part may be absent.
+                right = "  ".join(x for x in (repo, _pr_number(t.pr_url)) if x)
+            if right:
+                pad = max(1, w - 1 - len(line) - len(right))
+                line = line + (" " * pad) + right
             stdscr.addnstr(y, 0, line, w - 1, attr)
             if t.tag and t.section != RECENT and not attr:
                 tag_str = f":{t.tag}:"
