@@ -4,7 +4,7 @@
 # A promoted standard-mode task comes up in a detached tmux session
 # running bin/cloude-run (which execs `docker run ... claude ...`).
 # This poller watches that session's pane until Claude Code's
-# interactive input box is up, then PASTES a prompt into it — left
+# interactive input box is ready, then PASTES a prompt into it — left
 # unsent — so the user can just press Enter to begin planning, or edit
 # the prompt first.
 #
@@ -17,9 +17,43 @@
 # the whole block into the input box without treating a newline as
 # submit. A bare send-keys newline would submit the prompt prematurely.
 #
-# Why poll: image build + dockerd startup + Claude init take a variable
-# amount of time. We grep `tmux capture-pane` for the interactive-input
-# marker rather than guessing with a fixed sleep.
+# Detecting "ready for input"
+# ---------------------------
+# Image build + dockerd startup + Claude init take a variable amount of
+# time, so we poll rather than guessing with a fixed sleep. Two signals,
+# either of which counts as ready:
+#
+#   1. Primary — the bracketed-paste-enable escape (ESC[?2004h) in the
+#      pane's raw output stream, captured via `tmux pipe-pane`. Claude
+#      Code emits it once, when its TUI initializes the very input mode
+#      this script relies on: if that sequence never appears, a
+#      bracketed paste would not work anyway. It is independent of any
+#      on-screen wording, so a Claude Code UI restyle can't break it.
+#      cloude-run runs claude non-interactively-launched (the pane shell
+#      execs `docker run` with no interactive shell before it), so the
+#      first ESC[?2004h on the stream is unambiguously Claude's.
+#
+#   2. Fallback — a case-insensitive regex matched against the rendered
+#      pane (`tmux capture-pane`). Default: "bypass permissions on", the
+#      footer Claude Code shows once its REPL is up (cloude-run always
+#      passes --dangerously-skip-permissions). Covers the case where the
+#      raw-stream capture missed the escape (e.g. pipe-pane attached a
+#      hair late) and is overridable for UI changes via
+#      CLOUDE_PREFILL_READY_REGEX.
+#
+# Alternative considered, for future reference — a SessionStart hook.
+# Claude Code's `SessionStart` hook is an official extension point that
+# fires when a session starts; a hook in /etc/cloude/settings.json could
+# write a sentinel the host poller waits for, removing the dependence on
+# terminal-stream heuristics entirely. It is not used here because the
+# hook runs inside the container and this poller runs on the host, so it
+# needs a shared-filesystem channel: the sentinel would have to land on
+# a mount visible at the same path both sides (tasks/active/ is the only
+# writable candidate — a dot-file there, with some clutter and a stale
+# file if a container restarts with no poller watching). SessionStart
+# also fires slightly before the input box is painted and fires again on
+# resumes. Worth revisiting if the two terminal signals above ever prove
+# unreliable; it would be the most robust option.
 #
 # Graceful degradation: on timeout, a vanished session, or any tmux
 # error, the poller logs and exits 0 without pasting — the box is just
@@ -30,14 +64,10 @@
 #   CLOUDE_PREFILL_TIMEOUT    seconds to wait for the input box
 #                             (default 300).
 #   CLOUDE_PREFILL_READY_REGEX
-#                             Case-insensitive ERE matched against the
-#                             captured pane to detect the ready input
-#                             box. Default: "bypass permissions on" —
-#                             the footer Claude Code shows once its
-#                             interactive REPL is up (bin/cloude-run
-#                             always launches claude with
-#                             --dangerously-skip-permissions, so that
-#                             footer is always present). Override if a
+#                             Case-insensitive ERE for the fallback
+#                             detection (signal 2 above), matched
+#                             against the rendered pane. Default:
+#                             "bypass permissions on". Override if a
 #                             Claude Code UI change moves the marker.
 
 set -uo pipefail
@@ -54,18 +84,28 @@ fi
 SESSION="$1"
 PROMPT_FILE="$2"
 
-# Drop the "cloude-" prefix to get the task slug, used for the log file
-# and tmux buffer names.
+# Drop the "cloude-" prefix to get the task slug, used for the log file,
+# the tmux buffer name, and the raw-capture temp file.
 SLUG="${SESSION#cloude-}"
 LOG="/tmp/cloude-prefill-${SLUG}.log"
 BUFFER="cloude-prefill-${SLUG}"
+
+pane_id=""
+RAW_LOG=""
 
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
 }
 
-# However we exit, don't leave the rendered prompt temp file behind.
-trap 'rm -f "$PROMPT_FILE" 2>/dev/null || true' EXIT
+# However we exit: stop the raw-stream capture and drop the temp files
+# (the rendered prompt and the raw-capture log).
+cleanup() {
+    if [[ -n "$pane_id" ]]; then
+        tmux pipe-pane -t "$pane_id" 2>/dev/null || true
+    fi
+    rm -f "$PROMPT_FILE" "$RAW_LOG" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 if [[ -n "${CLOUDE_NO_PREFILL:-}" ]]; then
     log "CLOUDE_NO_PREFILL set — skipping prefill for $SESSION"
@@ -85,23 +125,50 @@ if ! command -v tmux >/dev/null 2>&1; then
     exit 0
 fi
 
+# Resolve the session's active pane id (%N — unambiguous). A bare or
+# "="-prefixed session name is a valid target-session but NOT a valid
+# target-pane for capture-pane / paste-buffer / pipe-pane, so the pane
+# has to be resolved explicitly.
+pane_id="$(tmux display-message -p -t "$SESSION" '#{pane_id}' 2>/dev/null || true)"
+if [[ -z "$pane_id" ]]; then
+    log "session '$SESSION' not found — aborting prefill"
+    exit 0
+fi
+
+# Start teeing the pane's raw output (escape sequences and all) so the
+# detection loop can watch for the bracketed-paste-enable sequence.
+RAW_LOG="$(mktemp "${TMPDIR:-/tmp}/cloude-prefill-raw-${SLUG}.XXXXXX" 2>/dev/null || true)"
+if [[ -n "$RAW_LOG" ]]; then
+    if ! tmux pipe-pane -O -t "$pane_id" "cat >> '$RAW_LOG'" 2>>"$LOG"; then
+        log "tmux pipe-pane failed — relying on the rendered-pane fallback"
+        rm -f "$RAW_LOG" 2>/dev/null || true
+        RAW_LOG=""
+    fi
+fi
+
 log "waiting for Claude Code input box in '$SESSION' (timeout ${TIMEOUT}s)"
 
+# ESC[?2004h — DEC private mode 2004 set, i.e. bracketed paste enabled.
+BP_ON=$'\033[?2004h'
+
 ready=""
-pane_id=""
+ready_via=""
 while ((SECONDS < TIMEOUT)); do
-    # Resolve the session's active pane id (%N — unambiguous). A bare
-    # or "="-prefixed session name is a valid target-session but NOT a
-    # valid target-pane for capture-pane / paste-buffer, so the pane
-    # has to be resolved explicitly. An empty result => session gone.
-    pane_id="$(tmux display-message -p -t "$SESSION" '#{pane_id}' 2>/dev/null || true)"
-    if [[ -z "$pane_id" ]]; then
+    if ! tmux display-message -p -t "$SESSION" '#{pane_id}' >/dev/null 2>&1; then
         log "session '$SESSION' is gone — aborting prefill"
         exit 0
     fi
+    # Primary: bracketed-paste-enable in the raw output stream.
+    if [[ -n "$RAW_LOG" ]] && grep -aqF -- "$BP_ON" "$RAW_LOG" 2>/dev/null; then
+        ready=1
+        ready_via="bracketed-paste-enable escape"
+        break
+    fi
+    # Fallback: the ready-state footer text in the rendered pane.
     pane="$(tmux capture-pane -p -t "$pane_id" 2>/dev/null || true)"
     if grep -iEq -- "$READY_REGEX" <<<"$pane"; then
         ready=1
+        ready_via="rendered-pane marker"
         break
     fi
     sleep 1
@@ -111,6 +178,7 @@ if [[ -z "$ready" ]]; then
     log "timed out after ${TIMEOUT}s waiting for input box — leaving box empty"
     exit 0
 fi
+log "input box ready (detected via $ready_via)"
 
 # Let the frame settle, then paste the prompt as a bracketed paste so
 # multi-line text lands in the box as input without submitting.
