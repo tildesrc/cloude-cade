@@ -158,7 +158,7 @@ session are all named after — to the system clipboard, ready to paste
 into a command.
 
 ```sh
-bin/cloude-dash    # p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
+bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
@@ -405,6 +405,16 @@ the highlighted task's PR in the default browser, `t` switches to its
 `cloude-<slug>` tmux session (uses `tmux switch-client` when the
 dashboard is already inside tmux, otherwise `tmux attach`), `r`
 reloads, `q` quits.
+
+Press `/` to enter search-as-you-type mode. The status line shows the
+query as you type; rows are filtered fzf-style to those whose title
+contains the query (case-insensitive substring), and surviving section
+headers show `(matched/total)` so you can see what's been filtered out.
+`↑`/`↓` still navigate the filtered list while typing. `Esc` clears
+the query and exits search mode; `Enter` locks the filter, restoring
+the normal keymap (`j`/`k`/`p`/`t`/`c`/`g`/`G`/`r`) over the filtered
+set — `Esc` while locked clears the filter, and `/` from a locked
+filter starts a fresh query.
 
 The dashboard auto-reloads (via inotify) whenever a task file changes,
 and a reload can reorder rows — a stage transition re-sorts a task
