@@ -724,18 +724,14 @@ dependency, and runs on plain `python3`.
   tmux pane until Claude Code's interactive input box is ready, then
   *pastes* the prompt in — a bracketed paste, so a multi-line staging
   entry lands as unsent input rather than submitting on the first
-  newline. Readiness is detected from two signals, either of which
-  counts: primarily the bracketed-paste-enable escape (`ESC[?2004h`)
-  in the pane's raw output stream, captured via `tmux pipe-pane` —
-  this keys on the exact terminal capability the paste relies on and
-  is independent of any on-screen wording; and, as a fallback, a
-  regex on the rendered pane (`tmux capture-pane`). On timeout, a
-  vanished session, or any tmux error it just leaves the box empty;
-  it never blocks or fails the promote. Env knobs: `CLOUDE_NO_PREFILL`
-  (set non-empty to opt out), `CLOUDE_PREFILL_TIMEOUT` (seconds to
-  wait, default 300), `CLOUDE_PREFILL_READY_REGEX` (the
-  case-insensitive fallback marker, default `bypass permissions on` —
-  Claude Code's ready-state footer). Logs to
+  newline. Readiness is detected from the bracketed-paste-enable
+  escape (`ESC[?2004h`) in the pane's raw output stream, captured via
+  `tmux pipe-pane` — this keys on the exact terminal capability the
+  paste relies on and is independent of any on-screen wording. On
+  timeout, a vanished session, or any tmux error it just leaves the
+  box empty; it never blocks or fails the promote. Env knobs:
+  `CLOUDE_NO_PREFILL` (set non-empty to opt out) and
+  `CLOUDE_PREFILL_TIMEOUT` (seconds to wait, default 300). Logs to
   `/tmp/cloude-prefill-<slug>.log`.
 - **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
   `/finalize` steps 4-10: verify/close PR, kill tmux, remove
