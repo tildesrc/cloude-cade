@@ -479,6 +479,13 @@ bin/cloude-run <worktree-abs-path> <task-file-abs-path>
 Both arguments are absolute paths the caller already has — `cloude-run`
 doesn't look up tasks by slug or parse org files.
 
+The `cloude-<slug>` tmux session `/promote` creates carries
+`CLOUDE_TASK_FILE` in its session environment — the absolute path of
+the task's active `.org` file. It's inherited by every pane, so the
+host shell left behind once `cloude-run` exits still knows which task
+the session belongs to (matching the `CLOUDE_TASK_FILE` `cloude-run`
+exports inside the container).
+
 ### Per-repo pre-launch hooks
 
 Some projects ship config that doesn't behave inside the container —
