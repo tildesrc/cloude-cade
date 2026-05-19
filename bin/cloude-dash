@@ -500,30 +500,54 @@ _WATCH_DIRS = (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped")
 
 
 class _Watcher:
-    """File-change watcher: uses inotify on Linux, mtime polling elsewhere."""
+    """Abstract base for file-change watchers."""
+
+    def changed(self) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def create() -> "_Watcher":
+        """Return the best available watcher for this platform."""
+        try:
+            return _InotifyWatcher()
+        except (ImportError, AttributeError, OSError):
+            return _MtimeWatcher()
+
+
+class _InotifyWatcher(_Watcher):
+    """Event-driven watcher using inotify (Linux only)."""
 
     def __init__(self) -> None:
-        self._inot = None
-        try:
-            from inotify_simple import INotify, flags as inotify_flags
-            watch_flags = (
-                inotify_flags.CREATE
-                | inotify_flags.DELETE
-                | inotify_flags.MODIFY
-                | inotify_flags.MOVED_TO
-                | inotify_flags.MOVED_FROM
-                | inotify_flags.CLOSE_WRITE
-            )
-            inot = INotify()
-            for d in _WATCH_DIRS:
-                if d.is_dir():
-                    inot.add_watch(str(d), watch_flags)
-            self._inot = inot
-        except (ImportError, AttributeError, OSError):
-            pass
-        self._last_mtime = self._scan_mtime()
+        from inotify_simple import INotify, flags as inotify_flags
+        watch_flags = (
+            inotify_flags.CREATE
+            | inotify_flags.DELETE
+            | inotify_flags.MODIFY
+            | inotify_flags.MOVED_TO
+            | inotify_flags.MOVED_FROM
+            | inotify_flags.CLOSE_WRITE
+        )
+        self._inot = INotify()
+        for d in _WATCH_DIRS:
+            if d.is_dir():
+                self._inot.add_watch(str(d), watch_flags)
 
-    def _scan_mtime(self) -> float:
+    def changed(self) -> bool:
+        events = self._inot.read(timeout=0)
+        if events:
+            time.sleep(0.05)  # debounce coalesces burst writes
+            self._inot.read(timeout=0)
+            return True
+        return False
+
+
+class _MtimeWatcher(_Watcher):
+    """Polling watcher that compares mtimes (cross-platform fallback)."""
+
+    def __init__(self) -> None:
+        self._last_mtime = self._scan()
+
+    def _scan(self) -> float:
         best = 0.0
         for d in _WATCH_DIRS:
             if not d.is_dir():
@@ -540,14 +564,7 @@ class _Watcher:
         return best
 
     def changed(self) -> bool:
-        if self._inot is not None:
-            events = self._inot.read(timeout=0)
-            if events:
-                time.sleep(0.05)  # debounce coalesces burst writes
-                self._inot.read(timeout=0)
-                return True
-            return False
-        cur = self._scan_mtime()
+        cur = self._scan()
         if cur != self._last_mtime:
             self._last_mtime = cur
             return True
@@ -563,7 +580,7 @@ def _run(stdscr) -> None:
         curses.init_pair(2, curses.COLOR_YELLOW, -1)  # user
         curses.init_pair(3, curses.COLOR_RED, -1)     # blocked
 
-    watcher = _Watcher()
+    watcher = _Watcher.create()
     stdscr.timeout(500)  # getch() returns -1 after 500ms of no input
 
     # Search state. `search_query` is the current filter substring; when
