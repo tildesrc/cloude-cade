@@ -19,12 +19,14 @@ help:
 
 build:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg HOST_UID=$(HOST_UID) \
 		--build-arg HOST_GID=$(HOST_GID) \
 		-t $(IMAGE) .
 
 rebuild:
 	docker build --no-cache \
+		--platform linux/amd64 \
 		--build-arg HOST_UID=$(HOST_UID) \
 		--build-arg HOST_GID=$(HOST_GID) \
 		-t $(IMAGE) .
