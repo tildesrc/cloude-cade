@@ -286,6 +286,18 @@ def _selectable_indices(rows) -> list[int]:
     return [i for i, (kind, _) in enumerate(rows) if kind == ROW_TASK]
 
 
+def _task_key(t: Task) -> tuple[str, str]:
+    """Stable identity for a task, used to keep the highlight on the
+    same task across a reload that reorders rows.
+
+    The filename is preserved when a task file moves active/ ->
+    completed/ / dropped/ (only the directory changes), so it pins a
+    logical task even as its section changes. STAGING and TODO-keyword
+    rows all share the single staging.org path, so the title
+    disambiguates them."""
+    return (t.path.name, t.title)
+
+
 def _pr_number(url: str | None) -> str:
     if not url:
         return ""
@@ -403,6 +415,24 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.refresh()
 
 
+def _follow_selection(rows, prev_key: tuple[str, str] | None, fallback: int) -> int:
+    """Pick the selection index for freshly-reloaded `rows`.
+
+    `prev_key` is the `_task_key` of the task highlighted before the
+    reload, or None if no task was highlighted. If a row in the new
+    `rows` carries that key, return its index so the highlight follows
+    the task through any reordering. Otherwise (task gone, or nothing
+    was selected) return `fallback`, clamped to a selectable row."""
+    sels = _selectable_indices(rows)
+    if prev_key is not None:
+        for i in sels:
+            if _task_key(rows[i][1]) == prev_key:
+                return i
+    if sels and fallback not in sels:
+        return sels[0]
+    return fallback
+
+
 def _move_selection(rows, sel: int, delta: int) -> int:
     selectables = _selectable_indices(rows)
     if not selectables:
@@ -453,13 +483,14 @@ def _run(stdscr) -> None:
     status = ""
 
     def reload(label: str) -> tuple[list, int, str]:
-        groups = load_tasks()
-        rows = _flatten(groups)
-        sels = _selectable_indices(rows)
-        sel = selected
-        if sels and sel not in sels:
-            sel = sels[0]
-        return rows, sel, label
+        # Remember which task is highlighted so the highlight can
+        # follow it if the rebuilt rows reorder it (stage re-sort, a
+        # task inserted above it, an active/ -> completed/ move).
+        prev_key = None
+        if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+            prev_key = _task_key(rows[selected][1])
+        new_rows = _flatten(load_tasks())
+        return new_rows, _follow_selection(new_rows, prev_key, selected), label
 
     while True:
         _draw(stdscr, rows, selected, status)
