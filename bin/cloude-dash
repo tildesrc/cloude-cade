@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import curses
+import functools
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -303,25 +305,43 @@ def _slug_from_filename(path: Path) -> str:
     return name[11:] if len(name) > 11 and name[4] == "-" else name
 
 
-def _copy_to_clipboard(text: str) -> str | None:
-    """Copy `text` to the system clipboard, trying the common utilities
-    in turn: `wl-copy` (Wayland), `xclip` / `xsel` (X11), `pbcopy`
-    (macOS). Returns the name of the tool that succeeded, or None when
-    no clipboard utility is installed (or every one of them failed)."""
-    candidates = (
-        ("wl-copy", ["wl-copy"]),
-        ("xclip", ["xclip", "-selection", "clipboard"]),
-        ("xsel", ["xsel", "--clipboard", "--input"]),
-        ("pbcopy", ["pbcopy"]),
-    )
-    for name, cmd in candidates:
-        try:
-            r = subprocess.run(cmd, input=text, text=True, capture_output=True)
-        except FileNotFoundError:
-            continue
-        if r.returncode == 0:
-            return name
+# Clipboard utilities tried in order; the first whose binary is on
+# PATH wins. wl-copy = Wayland, xclip / xsel = X11, pbcopy = macOS.
+_CLIPBOARD_TOOLS = (
+    ["wl-copy"],
+    ["xclip", "-selection", "clipboard"],
+    ["xsel", "--clipboard", "--input"],
+    ["pbcopy"],
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _detect_clipboard_tool() -> list[str] | None:
+    """Pick the clipboard command to use: the first entry of
+    `_CLIPBOARD_TOOLS` whose binary is found on PATH. Returns the full
+    argv (or None when no clipboard utility is installed).
+
+    `lru_cache` makes the PATH probe run exactly once — on the first
+    copy — so every later `_copy_to_clipboard` call reuses the result
+    instead of re-scanning PATH."""
+    for cmd in _CLIPBOARD_TOOLS:
+        if shutil.which(cmd[0]):
+            return cmd
     return None
+
+
+def _copy_to_clipboard(text: str) -> str | None:
+    """Copy `text` to the system clipboard using the tool chosen by
+    `_detect_clipboard_tool`. Returns that tool's name on success, or
+    None when no clipboard utility is available or the copy failed."""
+    cmd = _detect_clipboard_tool()
+    if cmd is None:
+        return None
+    try:
+        r = subprocess.run(cmd, input=text, text=True, capture_output=True)
+    except OSError:
+        return None
+    return cmd[0] if r.returncode == 0 else None
 
 
 def _tmux_session_for(t: Task) -> str | None:
