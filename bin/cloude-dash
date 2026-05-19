@@ -496,23 +496,7 @@ def _move_selection(rows, sel: int, delta: int) -> int:
     return selectables[idx]
 
 
-def _scan_mtime() -> float:
-    """Return the max mtime across all watched dirs and their .org files."""
-    dirs = (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped")
-    best = 0.0
-    for d in dirs:
-        if not d.is_dir():
-            continue
-        try:
-            best = max(best, d.stat().st_mtime)
-        except OSError:
-            pass
-        for f in d.glob("*.org"):
-            try:
-                best = max(best, f.stat().st_mtime)
-            except OSError:
-                pass
-    return best
+_WATCH_DIRS = (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped")
 
 
 class _Watcher:
@@ -531,13 +515,29 @@ class _Watcher:
                 | inotify_flags.CLOSE_WRITE
             )
             inot = INotify()
-            for d in (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped"):
+            for d in _WATCH_DIRS:
                 if d.is_dir():
                     inot.add_watch(str(d), watch_flags)
             self._inot = inot
         except (ImportError, AttributeError, OSError):
             pass
-        self._last_mtime = _scan_mtime()
+        self._last_mtime = self._scan_mtime()
+
+    def _scan_mtime(self) -> float:
+        best = 0.0
+        for d in _WATCH_DIRS:
+            if not d.is_dir():
+                continue
+            try:
+                best = max(best, d.stat().st_mtime)
+            except OSError:
+                pass
+            for f in d.glob("*.org"):
+                try:
+                    best = max(best, f.stat().st_mtime)
+                except OSError:
+                    pass
+        return best
 
     def changed(self) -> bool:
         if self._inot is not None:
@@ -547,7 +547,7 @@ class _Watcher:
                 self._inot.read(timeout=0)
                 return True
             return False
-        cur = _scan_mtime()
+        cur = self._scan_mtime()
         if cur != self._last_mtime:
             self._last_mtime = cur
             return True
