@@ -433,7 +433,11 @@ record "Removed staging entry"
 if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
     bail 20 "tmux session '$TMUX_SESSION' already exists"
 fi
+# -e sets CLOUDE_TASK_FILE in the session environment, which the
+# initial pane (and any later windows/panes) inherits - so the host
+# shell left behind by `exec bash` knows which task this session is.
 if ! tmux new-session -d -s "$TMUX_SESSION" -c "$WORKTREE" \
+        -e "CLOUDE_TASK_FILE=$TASK_FILE" \
         "$CLOUDE_ROOT/bin/cloude-run $WORKTREE $TASK_FILE; exec bash"; then
     bail 20 "tmux new-session failed"
 fi
