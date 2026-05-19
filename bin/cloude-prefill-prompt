@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# Pre-fill a freshly launched task container's Claude Code input box.
+#
+# A promoted standard-mode task comes up in a detached tmux session
+# running bin/cloude-run (which execs `docker run ... claude ...`).
+# This poller watches that session's pane until Claude Code's
+# interactive input box is ready, then PASTES a prompt into it — left
+# unsent — so the user can just press Enter to begin planning, or edit
+# the prompt first.
+#
+# Launched detached by bin/cloude-promote-setup:
+#   setsid bin/cloude-prefill-prompt <tmux-session> <prompt-file> &
+# so /promote returns immediately.
+#
+# Why paste, not send-keys: a staging entry may span multiple lines.
+# `tmux paste-buffer -p` uses bracketed paste, so Claude Code inserts
+# the whole block into the input box without treating a newline as
+# submit. A bare send-keys newline would submit the prompt prematurely.
+#
+# Detecting "ready for input"
+# ---------------------------
+# Image build + dockerd startup + Claude init take a variable amount of
+# time, so we poll rather than guessing with a fixed sleep. The signal
+# is the bracketed-paste-enable escape (ESC[?2004h) in the pane's raw
+# output stream, captured via `tmux pipe-pane`. Claude Code emits it
+# once, when its TUI initializes the very input mode this script relies
+# on: if that sequence never appears, a bracketed paste would not work
+# anyway. It is independent of any on-screen wording, so a Claude Code
+# UI restyle can't break it. cloude-run starts claude with no
+# interactive shell ahead of it (the pane shell execs `docker run`
+# directly), so the first ESC[?2004h on the stream is unambiguously
+# Claude's. The poller is launched right after `tmux new-session`, so
+# pipe-pane attaches well before claude gets that far.
+#
+# (An earlier revision also had a fallback — a regex on the rendered
+# pane via `tmux capture-pane`. It was dropped: in the automated
+# /promote flow pipe-pane always attaches seconds before the escape, so
+# the fallback never fired, and it coupled detection to Claude Code's
+# UI wording. The one signal above is relied on alone.)
+#
+# Alternative considered, for future reference — a SessionStart hook.
+# Claude Code's `SessionStart` hook is an official extension point that
+# fires when a session starts; a hook in /etc/cloude/settings.json could
+# write a sentinel the host poller waits for, removing the dependence on
+# terminal-stream heuristics entirely. It is not used here because the
+# hook runs inside the container and this poller runs on the host, so it
+# needs a shared-filesystem channel: the sentinel would have to land on
+# a mount visible at the same path both sides (tasks/active/ is the only
+# writable candidate — a dot-file there, with some clutter and a stale
+# file if a container restarts with no poller watching). SessionStart
+# also fires slightly before the input box is painted and fires again on
+# resumes. Worth revisiting if the ESC[?2004h signal ever proves
+# unreliable; it would be the most robust option.
+#
+# Graceful degradation: on timeout, a vanished session, or any tmux
+# error (including pipe-pane being unavailable), the poller logs and
+# exits 0 without pasting — the box is just left empty. It never blocks
+# or fails the promote.
+#
+# Env knobs:
+#   CLOUDE_NO_PREFILL       non-empty -> do nothing (opt out).
+#   CLOUDE_PREFILL_TIMEOUT  seconds to wait for the input box
+#                           (default 300).
+
+set -uo pipefail
+
+usage() {
+    echo "Usage: $(basename "$0") <tmux-session> <prompt-file>" >&2
+}
+
+if [[ $# -ne 2 ]]; then
+    usage
+    exit 2
+fi
+
+SESSION="$1"
+PROMPT_FILE="$2"
+
+# Drop the "cloude-" prefix to get the task slug, used for the log file,
+# the tmux buffer name, and the raw-capture temp file.
+SLUG="${SESSION#cloude-}"
+LOG="/tmp/cloude-prefill-${SLUG}.log"
+BUFFER="cloude-prefill-${SLUG}"
+
+pane_id=""
+RAW_LOG=""
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# However we exit: stop the raw-stream capture and drop the temp files
+# (the rendered prompt and the raw-capture log).
+cleanup() {
+    if [[ -n "$pane_id" ]]; then
+        tmux pipe-pane -t "$pane_id" 2>/dev/null || true
+    fi
+    rm -f "$PROMPT_FILE" "$RAW_LOG" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+if [[ -n "${CLOUDE_NO_PREFILL:-}" ]]; then
+    log "CLOUDE_NO_PREFILL set — skipping prefill for $SESSION"
+    exit 0
+fi
+
+TIMEOUT="${CLOUDE_PREFILL_TIMEOUT:-300}"
+
+if [[ ! -s "$PROMPT_FILE" ]]; then
+    log "prompt file missing or empty ($PROMPT_FILE) — nothing to prefill"
+    exit 0
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+    log "tmux not found — cannot prefill $SESSION"
+    exit 0
+fi
+
+# Resolve the session's active pane id (%N — unambiguous). A bare or
+# "="-prefixed session name is a valid target-session but NOT a valid
+# target-pane for paste-buffer / pipe-pane, so the pane has to be
+# resolved explicitly.
+pane_id="$(tmux display-message -p -t "$SESSION" '#{pane_id}' 2>/dev/null || true)"
+if [[ -z "$pane_id" ]]; then
+    log "session '$SESSION' not found — aborting prefill"
+    exit 0
+fi
+
+# Tee the pane's raw output (escape sequences and all) so the detection
+# loop can watch for the bracketed-paste-enable sequence. Without this
+# capture there is no readiness signal, so a failure here aborts.
+RAW_LOG="$(mktemp "${TMPDIR:-/tmp}/cloude-prefill-raw-${SLUG}.XXXXXX" 2>/dev/null || true)"
+if [[ -z "$RAW_LOG" ]]; then
+    log "could not create raw-capture temp file — aborting prefill"
+    exit 0
+fi
+if ! tmux pipe-pane -O -t "$pane_id" "cat >> '$RAW_LOG'" 2>>"$LOG"; then
+    log "tmux pipe-pane failed — no way to detect readiness, aborting prefill"
+    exit 0
+fi
+
+log "waiting for Claude Code input box in '$SESSION' (timeout ${TIMEOUT}s)"
+
+# ESC[?2004h — DEC private mode 2004 set, i.e. bracketed paste enabled.
+BP_ON=$'\033[?2004h'
+
+ready=""
+while ((SECONDS < TIMEOUT)); do
+    if ! tmux display-message -p -t "$SESSION" '#{pane_id}' >/dev/null 2>&1; then
+        log "session '$SESSION' is gone — aborting prefill"
+        exit 0
+    fi
+    if grep -aqF -- "$BP_ON" "$RAW_LOG" 2>/dev/null; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ -z "$ready" ]]; then
+    log "timed out after ${TIMEOUT}s waiting for input box — leaving box empty"
+    exit 0
+fi
+log "input box ready (bracketed-paste-enable escape seen)"
+
+# Let the frame settle, then paste the prompt as a bracketed paste so
+# multi-line text lands in the box as input without submitting.
+sleep 1
+
+if ! tmux load-buffer -b "$BUFFER" "$PROMPT_FILE" 2>>"$LOG"; then
+    log "tmux load-buffer failed — leaving box empty"
+    exit 0
+fi
+
+if tmux paste-buffer -p -d -b "$BUFFER" -t "$pane_id" 2>>"$LOG"; then
+    log "pasted prompt into '$SESSION' input box"
+else
+    log "tmux paste-buffer failed — leaving box empty"
+    tmux delete-buffer -b "$BUFFER" 2>/dev/null || true
+fi
+
+exit 0

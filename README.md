@@ -174,10 +174,12 @@ See [Dashboard](#dashboard) for the full key list.
    draft PR, and a detached `cloude-<slug>` tmux session. The task starts
    in `PLANNING :user:` — waiting for you.
 3. **Plan.** Attach to the task's tmux session (`tmux attach -t
-   cloude-<slug>`, or press `t` on the dashboard) and give the agent a
-   planning prompt — a hook flips the task to `:agent:` so the
-   dashboard shows it's now progressing on its own. When you approve
-   its plan, another hook flips the task to `ITERATING` automatically.
+   cloude-<slug>`, or press `t` on the dashboard). The agent's input
+   box comes pre-filled with the promoted staging entry as a planning
+   prompt — press Enter to start planning, or edit it first. A hook
+   flips the task to `:agent:` so the dashboard shows it's now
+   progressing on its own. When you approve its plan, another hook
+   flips the task to `ITERATING` automatically.
 4. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
    watches CI after each push. When a stage's work is done the agent
    flips its tag to `:user:` — that's your cue to run `/advance` to move
@@ -587,7 +589,11 @@ commands:
     a `cloude/<slug>` branch in the project's repo off the default
     branch, a worktree under `worktrees/<repo-name>/<slug>`, a draft
     PR, and a detached tmux session named `cloude-<slug>`. Starts in
-    `PLANNING :user:`.
+    `PLANNING :user:`. The new container's Claude Code input box is
+    pre-filled with the promoted staging entry as a planning prompt,
+    left unsent — press Enter to start, or edit it first (see
+    `cloude-prefill-prompt` under [Helper scripts in
+    `bin/`](#helper-scripts-in-bin)).
   - **ADOPT**: triggered when the staging idea is `ADOPT <PR url>`.
     No new branch or PR — checks out the existing PR's branch as a
     worktree, uses the PR's title for the task heading, and starts in
@@ -725,10 +731,28 @@ dependency, and runs on plain `python3`.
   steps 4-9: ensure source clone, create worktree + branch, push
   (standard) or fetch (ADOPT), open draft PR (standard only),
   render task file from `tasks/TEMPLATE.org`, remove staging entry,
-  start tmux session. Distinct non-zero exit codes per failure mode
-  (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal, 20
-  tmux collision, 30 arg validation) and a "Succeeded so far" trail
-  on stderr.
+  start tmux session, and — in standard mode — queue the staging
+  entry to pre-fill the container's input box via
+  `cloude-prefill-prompt`. Distinct non-zero exit codes per failure
+  mode (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal,
+  20 tmux collision, 30 arg validation) and a "Succeeded so far"
+  trail on stderr.
+- **`cloude-prefill-prompt <tmux-session> <prompt-file>`** —
+  Best-effort background poller that pre-fills a freshly promoted
+  task's Claude Code input box. Launched detached by
+  `cloude-promote-setup` (standard mode only): it watches the task's
+  tmux pane until Claude Code's interactive input box is ready, then
+  *pastes* the prompt in — a bracketed paste, so a multi-line staging
+  entry lands as unsent input rather than submitting on the first
+  newline. Readiness is detected from the bracketed-paste-enable
+  escape (`ESC[?2004h`) in the pane's raw output stream, captured via
+  `tmux pipe-pane` — this keys on the exact terminal capability the
+  paste relies on and is independent of any on-screen wording. On
+  timeout, a vanished session, or any tmux error it just leaves the
+  box empty; it never blocks or fails the promote. Env knobs:
+  `CLOUDE_NO_PREFILL` (set non-empty to opt out) and
+  `CLOUDE_PREFILL_TIMEOUT` (seconds to wait, default 300). Logs to
+  `/tmp/cloude-prefill-<slug>.log`.
 - **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
   `/finalize` steps 4-10: verify/close PR, kill tmux, remove
   worktree, remove DinD volume, delete branch (COMPLETE only), move
