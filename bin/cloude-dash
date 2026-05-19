@@ -259,17 +259,38 @@ ROW_EMPTY = "empty"
 
 def _flatten(
     groups: dict[str, list[Task] | dict[str, list[Task]]],
+    query: str = "",
 ) -> list[tuple[str, object]]:
+    """Flatten the loaded task groups into a list of (kind, payload) rows.
+
+    When `query` is non-empty, ROW_TASK rows whose title does not contain
+    the query (case-insensitive) are dropped, sections with zero
+    surviving rows are hidden entirely, and surviving section headers
+    show `LABEL (matched/total)` so the user sees the breakdown."""
     rows: list[tuple[str, object]] = []
+    needle = query.lower()
+    filtering = bool(needle)
+
+    def matches(t: Task) -> bool:
+        return needle in t.title.lower()
 
     def emit(label: str, items: list[Task], *, show_empty: bool) -> None:
-        if not items and not show_empty:
+        kept = [t for t in items if matches(t)] if filtering else items
+        # With a filter active, collapse sections that have no matches —
+        # the user only wants to see what survived.
+        if filtering and not kept:
             return
-        rows.append((ROW_HEADER, f"{label} ({len(items)})"))
-        if not items:
+        if not kept and not show_empty:
+            return
+        if filtering:
+            header = f"{label} ({len(kept)}/{len(items)})"
+        else:
+            header = f"{label} ({len(items)})"
+        rows.append((ROW_HEADER, header))
+        if not kept:
             rows.append((ROW_EMPTY, None))
             return
-        for t in items:
+        for t in kept:
             rows.append((ROW_TASK, t))
 
     emit(ACTIVE, groups[ACTIVE], show_empty=True)  # type: ignore[arg-type]
@@ -407,7 +428,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit"
+    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -517,8 +538,16 @@ def _run(stdscr) -> None:
     inot = _setup_inotify()
     stdscr.timeout(500)  # getch() returns -1 after 500ms of no input
 
+    # Search state. `search_query` is the current filter substring; when
+    # non-empty it filters the row list. `search_active` is True while
+    # the user is typing into the query (search mode); when False the
+    # query may still be non-empty — that's a "locked" filter, where the
+    # normal keymap works on the filtered set.
+    search_query = ""
+    search_active = False
+
     groups = load_tasks()
-    rows = _flatten(groups)
+    rows = _flatten(groups, search_query)
     selectables = _selectable_indices(rows)
     selected = selectables[0] if selectables else 0
     status = ""
@@ -527,14 +556,33 @@ def _run(stdscr) -> None:
         # Remember which task is highlighted so the highlight can
         # follow it if the rebuilt rows reorder it (stage re-sort, a
         # task inserted above it, an active/ -> completed/ move).
+        nonlocal groups
         prev_key = None
         if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
             prev_key = _task_key(rows[selected][1])
-        new_rows = _flatten(load_tasks())
+        groups = load_tasks()
+        new_rows = _flatten(groups, search_query)
         return new_rows, _follow_selection(new_rows, prev_key, selected), label
 
+    def refilter() -> tuple[list, int]:
+        # Re-flatten the existing groups with the current query and
+        # keep the highlight on the same task when possible.
+        prev_key = None
+        if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+            prev_key = _task_key(rows[selected][1])
+        new_rows = _flatten(groups, search_query)
+        return new_rows, _follow_selection(new_rows, prev_key, selected)
+
     while True:
-        _draw(stdscr, rows, selected, status)
+        if search_active:
+            display_status = f"/{search_query}"
+        elif search_query:
+            display_status = (
+                f"filter: {search_query}  (Esc to clear, / to refine)"
+            )
+        else:
+            display_status = status
+        _draw(stdscr, rows, selected, display_status)
         status = ""
         try:
             ch = stdscr.getch()
@@ -551,7 +599,44 @@ def _run(stdscr) -> None:
                 rows, selected, status = reload("auto-reloaded")
             continue
 
-        if ch in (ord("q"), 27):  # q or ESC
+        if search_active:
+            # In search-mode typing, every printable byte feeds the
+            # query. Only Esc / Enter / Backspace / arrows are control
+            # keys.
+            if ch == 27:  # Esc: clear and exit search mode
+                search_query = ""
+                search_active = False
+                rows, selected = refilter()
+            elif ch in (curses.KEY_ENTER, 10, 13):  # Enter: lock filter
+                search_active = False
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                if search_query:
+                    search_query = search_query[:-1]
+                    rows, selected = refilter()
+            elif ch in (curses.KEY_DOWN,):
+                selected = _move_selection(rows, selected, +1)
+            elif ch in (curses.KEY_UP,):
+                selected = _move_selection(rows, selected, -1)
+            elif 32 <= ch < 127:
+                search_query += chr(ch)
+                rows, selected = refilter()
+            # Anything else (function keys, etc.) is ignored.
+            continue
+
+        if ch == ord("/"):
+            # Start a fresh search; any previously locked filter is
+            # cleared so the user types into an empty query.
+            search_active = True
+            search_query = ""
+            rows, selected = refilter()
+            continue
+        if ch == 27:  # Esc outside search: clear locked filter if any
+            if search_query:
+                search_query = ""
+                rows, selected = refilter()
+                continue
+            return
+        if ch == ord("q"):
             return
         elif ch in (curses.KEY_DOWN, ord("j")):
             selected = _move_selection(rows, selected, +1)
