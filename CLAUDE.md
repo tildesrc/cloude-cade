@@ -214,6 +214,13 @@ user — keep it accurate so the user can tell at a glance which tasks
 need their attention vs. which are progressing on their own vs. which
 are waiting on something neither of you controls.
 
+The `:agent:` / `:user:` flips happen automatically: the in-container
+hooks (`bin/cloude-on-user-prompt` and `bin/cloude-on-stop`) set
+`:agent:` when a turn starts and `:user:` when a PLANNING / ITERATING
+turn ends. You only need to set `:blocked:` deliberately — and you
+*can* set it during a turn to keep the ball off the user at end of
+turn (e.g., when you've spawned external CI you want to wait on).
+
 ### Running inside the container
 
 When an agent is launched via `bin/cloude-run`, it runs inside a Docker

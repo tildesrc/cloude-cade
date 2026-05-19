@@ -29,6 +29,12 @@ import re
 import sys
 from pathlib import Path
 
+# `dod_marker_path` is shared with cloude-task-set-state and
+# cloude-on-stop; cloude_org.py is a stdlib-only sibling module (see its
+# docstring for why the hooks can't depend on orgparse).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import dod_marker_path  # noqa: E402
+
 
 def main() -> int:
     task = os.environ.get("CLOUDE_TASK_FILE")
@@ -51,6 +57,17 @@ def main() -> int:
     content = flip_planning_to_iterating(content)
 
     Path(task).write_text(content)
+
+    # PLANNING → ITERATING is a stage transition; arm the next `Stop`'s
+    # one-time DoD reminder, exactly as an explicit /advance would (it
+    # routes through cloude-task-set-state, which drops the same marker).
+    # Best-effort: a marker failure must not fail the auto-advance.
+    try:
+        dod_marker_path(task).touch()
+    except OSError as exc:
+        sys.stderr.write(
+            f"cloude-on-plan-accepted: could not write DoD marker: {exc}\n"
+        )
 
     print(
         "[cloude] Plan accepted; task auto-advanced PLANNING → ITERATING :agent:.\n"
