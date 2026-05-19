@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import curses
+import functools
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -303,6 +305,45 @@ def _slug_from_filename(path: Path) -> str:
     return name[11:] if len(name) > 11 and name[4] == "-" else name
 
 
+# Clipboard utilities tried in order; the first whose binary is on
+# PATH wins. wl-copy = Wayland, xclip / xsel = X11, pbcopy = macOS.
+_CLIPBOARD_TOOLS = (
+    ["wl-copy"],
+    ["xclip", "-selection", "clipboard"],
+    ["xsel", "--clipboard", "--input"],
+    ["pbcopy"],
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _detect_clipboard_tool() -> list[str] | None:
+    """Pick the clipboard command to use: the first entry of
+    `_CLIPBOARD_TOOLS` whose binary is found on PATH. Returns the full
+    argv (or None when no clipboard utility is installed).
+
+    `lru_cache` makes the PATH probe run exactly once — on the first
+    copy — so every later `_copy_to_clipboard` call reuses the result
+    instead of re-scanning PATH."""
+    for cmd in _CLIPBOARD_TOOLS:
+        if shutil.which(cmd[0]):
+            return cmd
+    return None
+
+
+def _copy_to_clipboard(text: str) -> str | None:
+    """Copy `text` to the system clipboard using the tool chosen by
+    `_detect_clipboard_tool`. Returns that tool's name on success, or
+    None when no clipboard utility is available or the copy failed."""
+    cmd = _detect_clipboard_tool()
+    if cmd is None:
+        return None
+    try:
+        r = subprocess.run(cmd, input=text, text=True, capture_output=True)
+    except OSError:
+        return None
+    return cmd[0] if r.returncode == 0 else None
+
+
 def _tmux_session_for(t: Task) -> str | None:
     if t.section != ACTIVE:
         return None
@@ -354,7 +395,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  p open PR  t tmux  r reload  q quit"
+    hint = "↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -507,6 +548,23 @@ def _run(stdscr) -> None:
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
                 status = _switch_tmux(stdscr, t)
+        elif ch == ord("c"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                # Only ACTIVE/RECENT rows are backed by a per-task
+                # YYYY-MM-DD-<slug>.org file; STAGING/TODO rows all
+                # share staging.org and have no per-task slug.
+                if t.section in (ACTIVE, RECENT):
+                    slug = _slug_from_filename(t.path)
+                    if _copy_to_clipboard(slug):
+                        status = f"copied slug: {slug}"
+                    else:
+                        status = (
+                            "(no clipboard tool: install wl-clipboard, "
+                            "xclip, or xsel)"
+                        )
+                else:
+                    status = "(no slug: not a per-task file)"
 
 
 def main() -> int:
