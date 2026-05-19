@@ -303,6 +303,27 @@ def _slug_from_filename(path: Path) -> str:
     return name[11:] if len(name) > 11 and name[4] == "-" else name
 
 
+def _copy_to_clipboard(text: str) -> str | None:
+    """Copy `text` to the system clipboard, trying the common utilities
+    in turn: `wl-copy` (Wayland), `xclip` / `xsel` (X11), `pbcopy`
+    (macOS). Returns the name of the tool that succeeded, or None when
+    no clipboard utility is installed (or every one of them failed)."""
+    candidates = (
+        ("wl-copy", ["wl-copy"]),
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("xsel", ["xsel", "--clipboard", "--input"]),
+        ("pbcopy", ["pbcopy"]),
+    )
+    for name, cmd in candidates:
+        try:
+            r = subprocess.run(cmd, input=text, text=True, capture_output=True)
+        except FileNotFoundError:
+            continue
+        if r.returncode == 0:
+            return name
+    return None
+
+
 def _tmux_session_for(t: Task) -> str | None:
     if t.section != ACTIVE:
         return None
@@ -354,7 +375,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  p open PR  t tmux  r reload  q quit"
+    hint = "↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -507,6 +528,23 @@ def _run(stdscr) -> None:
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
                 status = _switch_tmux(stdscr, t)
+        elif ch == ord("c"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                # Only ACTIVE/RECENT rows are backed by a per-task
+                # YYYY-MM-DD-<slug>.org file; STAGING/TODO rows all
+                # share staging.org and have no per-task slug.
+                if t.section in (ACTIVE, RECENT):
+                    slug = _slug_from_filename(t.path)
+                    if _copy_to_clipboard(slug):
+                        status = f"copied slug: {slug}"
+                    else:
+                        status = (
+                            "(no clipboard tool: install wl-clipboard, "
+                            "xclip, or xsel)"
+                        )
+                else:
+                    status = "(no slug: not a per-task file)"
 
 
 def main() -> int:

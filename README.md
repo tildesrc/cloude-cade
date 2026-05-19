@@ -123,7 +123,7 @@ stage, each tagged with who currently has the ball — `:agent:`,
 labelled with the repo it belongs to:
 
 ```text
-cloude tasks                 ↑/↓ move  p open PR  t tmux  r reload  q quit
+cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit
 
 ACTIVE (4)
   MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
@@ -152,8 +152,13 @@ To jump back, use tmux's default "switch to last session" binding —
 `Ctrl-b L` — which lands you straight on the dashboard, with no
 detaching or reattaching.
 
+Press `c` on a highlighted task to copy its slug — the `<slug>` of
+`YYYY-MM-DD-<slug>.org`, and the handle the branch, worktree, and tmux
+session are all named after — to the system clipboard, ready to paste
+into a command.
+
 ```sh
-bin/cloude-dash    # p: open PR · t: switch to task · r: reload · q: quit
+bin/cloude-dash    # p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
