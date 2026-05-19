@@ -547,10 +547,21 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   `cloude-on-user-prompt`; together they keep the `bin/cloude-dash`
   dashboard honest about which tasks are actually still being worked
   vs. waiting on the user.
+- **`PreToolUse:AskUserQuestion` / `PostToolUse:AskUserQuestion` →
+  `bin/cloude-on-user-question pre` / `… post`.** Manages the tag
+  around an `AskUserQuestion` wait window — neither `Stop` nor
+  `UserPromptSubmit` runs during one (the turn is still alive inside
+  the tool call, and the answer comes back as a tool result rather
+  than a fresh prompt), so without this hook the tag stays `:agent:`
+  while the user is being asked something. `pre` flips `:agent:` →
+  `:user:` just before the question is shown; `post` flips `:user:`
+  → `:agent:` once the answer arrives. Only acts on in-flight stages
+  and leaves `:blocked:` alone. Never blocks the tool call — exits 0
+  on every path, including a tag-flip helper failure.
 
-`cloude-on-user-prompt` and `cloude-on-stop` both read the task
-heading (TODO keyword + tag) to decide whether to act; that parsing
-is shared in `bin/cloude_org.py`. Unlike the org-reading helper
+`cloude-on-user-prompt`, `cloude-on-stop`, and `cloude-on-user-question`
+all read the task heading (TODO keyword + tag) to decide whether to
+act; that parsing is shared in `bin/cloude_org.py`. Unlike the org-reading helper
 scripts, the hooks deliberately *don't* use `orgparse`: Claude Code's
 hook runner executes them on plain stdlib `python3`, not through
 `uv`, so a third-party import would fail — and a one-line heading

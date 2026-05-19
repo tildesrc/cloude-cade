@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""PreToolUse / PostToolUse:AskUserQuestion hook handler.
+
+Manages the task heading's who-has-the-ball tag around an
+`AskUserQuestion` wait window. Fires twice per question:
+
+  - `pre`  (PreToolUse):  flip `:agent:` -> `:user:` just before the
+                          question is shown — the user now has the ball
+                          and the dashboard should say so.
+  - `post` (PostToolUse): flip `:user:` -> `:agent:` once the answer
+                          arrives — the agent has the ball again.
+
+Why this exists: `bin/cloude-on-stop` and `bin/cloude-on-user-prompt`
+keep the heading tag honest across turn boundaries, but neither runs
+during an `AskUserQuestion` wait — `Stop` doesn't fire (the turn is
+still alive inside the tool call) and `UserPromptSubmit` doesn't fire
+when the user answers (the answer comes back as a tool result, not a
+fresh prompt). Without this hook the tag stays `:agent:` throughout
+the wait, and `bin/cloude-dash` silently lies — a `:user:` task that
+needs attention shows up green as if the agent were still working.
+
+Both directions:
+  - Only act when $CLOUDE_TASK_FILE is set and points to an existing
+    file, and the heading's current TODO keyword is PLANNING /
+    ITERATING / REVIEW / MERGING (terminal states get no touch).
+  - Leave `:blocked:` alone — set deliberately, must not be silently
+    cleared by a stray question.
+  - Are idempotent: a no-op when the tag is already correct.
+  - NEVER block the tool call — exit 0 on every path, including
+    failure of the underlying tag-flip helper (warnings to stderr).
+
+Stdin (the PreToolUse / PostToolUse JSON payload) is drained but
+unused; the hook needs nothing from it.
+
+Usage:
+    cloude-on-user-question pre
+    cloude-on-user-question post
+
+Registered via /etc/cloude/settings.json, which bin/cloude-run wires
+in by passing `--settings /etc/cloude/settings.json` to claude.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# The heading parser is shared with bin/cloude-on-stop and
+# bin/cloude-on-user-prompt; all three hooks run on plain stdlib
+# python3, so it lives in a sibling module rather than orgparse (see
+# cloude_org.py for the full rationale).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import ball_tag, parse_heading  # noqa: E402
+
+IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+
+# (phase -> (current ball tag that triggers a flip, target tag, human label))
+PHASES = {
+    "pre":  ("agent", "user",  "Question opened — heading tag flipped :agent: -> :user:"),
+    "post": ("user",  "agent", "Question answered — heading tag flipped :user: -> :agent:"),
+}
+
+
+def main(argv: list[str]) -> int:
+    # Drain stdin (Pre/PostToolUse pass JSON) but we need nothing from it.
+    try:
+        json.load(sys.stdin)
+    except (ValueError, AttributeError):
+        pass
+
+    if len(argv) != 1 or argv[0] not in PHASES:
+        sys.stderr.write(
+            f"cloude-on-user-question: expected one of {sorted(PHASES)}, "
+            f"got {argv!r}\n"
+        )
+        return 0  # never block the tool call
+
+    from_tag, to_tag, label = PHASES[argv[0]]
+
+    task = os.environ.get("CLOUDE_TASK_FILE")
+    if not task or not Path(task).is_file():
+        return 0
+
+    parsed = parse_heading(Path(task).read_text())
+    if parsed is None:
+        return 0
+
+    state, tags = parsed
+    if state not in IN_FLIGHT or ball_tag(tags) != from_tag:
+        return 0
+
+    if flip_tag(task, to_tag):
+        print(f"[cloude] {label} ({state}).")
+    return 0
+
+
+def flip_tag(task: str, new_tag: str) -> bool:
+    """Flip the heading tag via the shared set-state helper.
+
+    Returns True on success; on failure warns to stderr and returns
+    False (the tool call is never blocked — main() always exits 0).
+    """
+    helper = Path(__file__).resolve().with_name("cloude-task-set-state")
+    try:
+        subprocess.run(
+            [sys.executable, str(helper), task, "--tag", new_tag],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        sys.stderr.write(f"cloude-on-user-question: tag flip failed: {detail}\n")
+        return False
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
