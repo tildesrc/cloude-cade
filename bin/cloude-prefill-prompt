@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Pre-fill a freshly launched task container's Claude Code input box.
+#
+# A promoted standard-mode task comes up in a detached tmux session
+# running bin/cloude-run (which execs `docker run ... claude ...`).
+# This poller watches that session's pane until Claude Code's
+# interactive input box is up, then PASTES a prompt into it — left
+# unsent — so the user can just press Enter to begin planning, or edit
+# the prompt first.
+#
+# Launched detached by bin/cloude-promote-setup:
+#   setsid bin/cloude-prefill-prompt <tmux-session> <prompt-file> &
+# so /promote returns immediately. Safe to run by hand too.
+#
+# Why paste, not send-keys: a staging entry may span multiple lines.
+# `tmux paste-buffer -p` uses bracketed paste, so Claude Code inserts
+# the whole block into the input box without treating a newline as
+# submit. A bare send-keys newline would submit the prompt prematurely.
+#
+# Why poll: image build + dockerd startup + Claude init take a variable
+# amount of time. We grep `tmux capture-pane` for the interactive-input
+# marker rather than guessing with a fixed sleep.
+#
+# Graceful degradation: on timeout, a vanished session, or any tmux
+# error, the poller logs and exits 0 without pasting — the box is just
+# left empty. It never blocks or fails the promote.
+#
+# Env knobs:
+#   CLOUDE_NO_PREFILL         non-empty -> do nothing (opt out).
+#   CLOUDE_PREFILL_TIMEOUT    seconds to wait for the input box
+#                             (default 300).
+#   CLOUDE_PREFILL_READY_REGEX
+#                             Case-insensitive ERE matched against the
+#                             captured pane to detect the ready input
+#                             box. Default: "bypass permissions on" —
+#                             the footer Claude Code shows once its
+#                             interactive REPL is up (bin/cloude-run
+#                             always launches claude with
+#                             --dangerously-skip-permissions, so that
+#                             footer is always present). Override if a
+#                             Claude Code UI change moves the marker.
+
+set -uo pipefail
+
+usage() {
+    echo "Usage: $(basename "$0") <tmux-session> <prompt-file>" >&2
+}
+
+if [[ $# -ne 2 ]]; then
+    usage
+    exit 2
+fi
+
+SESSION="$1"
+PROMPT_FILE="$2"
+
+# Drop the "cloude-" prefix to get the task slug, used for the log file
+# and tmux buffer names.
+SLUG="${SESSION#cloude-}"
+LOG="/tmp/cloude-prefill-${SLUG}.log"
+BUFFER="cloude-prefill-${SLUG}"
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# However we exit, don't leave the rendered prompt temp file behind.
+trap 'rm -f "$PROMPT_FILE" 2>/dev/null || true' EXIT
+
+if [[ -n "${CLOUDE_NO_PREFILL:-}" ]]; then
+    log "CLOUDE_NO_PREFILL set — skipping prefill for $SESSION"
+    exit 0
+fi
+
+TIMEOUT="${CLOUDE_PREFILL_TIMEOUT:-300}"
+READY_REGEX="${CLOUDE_PREFILL_READY_REGEX:-bypass permissions on}"
+
+if [[ ! -s "$PROMPT_FILE" ]]; then
+    log "prompt file missing or empty ($PROMPT_FILE) — nothing to prefill"
+    exit 0
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+    log "tmux not found — cannot prefill $SESSION"
+    exit 0
+fi
+
+log "waiting for Claude Code input box in '$SESSION' (timeout ${TIMEOUT}s)"
+
+ready=""
+pane_id=""
+while ((SECONDS < TIMEOUT)); do
+    # Resolve the session's active pane id (%N — unambiguous). A bare
+    # or "="-prefixed session name is a valid target-session but NOT a
+    # valid target-pane for capture-pane / paste-buffer, so the pane
+    # has to be resolved explicitly. An empty result => session gone.
+    pane_id="$(tmux display-message -p -t "$SESSION" '#{pane_id}' 2>/dev/null || true)"
+    if [[ -z "$pane_id" ]]; then
+        log "session '$SESSION' is gone — aborting prefill"
+        exit 0
+    fi
+    pane="$(tmux capture-pane -p -t "$pane_id" 2>/dev/null || true)"
+    if grep -iEq -- "$READY_REGEX" <<<"$pane"; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ -z "$ready" ]]; then
+    log "timed out after ${TIMEOUT}s waiting for input box — leaving box empty"
+    exit 0
+fi
+
+# Let the frame settle, then paste the prompt as a bracketed paste so
+# multi-line text lands in the box as input without submitting.
+sleep 1
+
+if ! tmux load-buffer -b "$BUFFER" "$PROMPT_FILE" 2>>"$LOG"; then
+    log "tmux load-buffer failed — leaving box empty"
+    exit 0
+fi
+
+if tmux paste-buffer -p -d -b "$BUFFER" -t "$pane_id" 2>>"$LOG"; then
+    log "pasted prompt into '$SESSION' input box"
+else
+    log "tmux paste-buffer failed — leaving box empty"
+    tmux delete-buffer -b "$BUFFER" 2>/dev/null || true
+fi
+
+exit 0
