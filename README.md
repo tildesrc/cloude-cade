@@ -404,6 +404,14 @@ the highlighted task's PR in the default browser, `t` switches to its
 dashboard is already inside tmux, otherwise `tmux attach`), `r`
 reloads, `q` quits.
 
+The dashboard auto-reloads (via inotify) whenever a task file changes,
+and a reload can reorder rows — a stage transition re-sorts a task
+within ACTIVE, a new task can appear above it, or it can move into
+RECENT. The highlight tracks the *task*, not the row index: across any
+reload (auto or `r`) it stays on whatever task you had selected. If
+that task disappears entirely, the highlight falls back to the first
+row.
+
 ```sh
 bin/cloude-dash
 ```
