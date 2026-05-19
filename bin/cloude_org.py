@@ -1,9 +1,16 @@
-"""Shared org task-heading parsing for the cloude hook scripts.
+"""Shared helpers for the cloude hook scripts and cloude-task-set-state.
 
 `bin/cloude-on-stop` and `bin/cloude-on-user-prompt` both need to read
 the first heading of a task `.org` file — its TODO keyword and its
 who-has-the-ball tag — to decide whether to act. This module is the one
 place that read-only parsing lives, so the two hooks cannot drift apart.
+
+It also owns `dod_marker_path` — the location of the per-task
+"a stage transition happened this turn" marker file. Four scripts
+agree on that path: `cloude-task-set-state` and `cloude-on-plan-accepted`
+drop the marker on a transition, and `cloude-on-stop` consumes it to
+fire its Definition-of-Done reminder only once per transition / `/iterate`
+turn rather than on every turn.
 
 Why a hand-rolled regex here, instead of `orgparse`?
 
@@ -31,6 +38,7 @@ heading still lives solely in `cloude-task-set-state`.
 """
 
 import re
+from pathlib import Path
 
 # The who-has-the-ball tags, in priority order — see CLAUDE.md's
 # "Who-has-the-ball tag" section.
@@ -71,3 +79,21 @@ def ball_tag(tags: list[str]) -> str:
     wins.
     """
     return next((t for t in BALL_TAGS if t in tags), "")
+
+
+def dod_marker_path(task_file: str | Path) -> Path:
+    """Return the per-task Definition-of-Done marker path.
+
+    The marker is a sentinel file: its mere presence means "a stage
+    transition happened this turn, so the next `Stop` should fire the
+    DoD reminder once." `cloude-task-set-state` (on a `--todo`
+    transition into an in-flight stage) and `cloude-on-plan-accepted`
+    create it; `cloude-on-stop` reads-and-unlinks it.
+
+    It lives in `/tmp` — container-local, writable, and discarded when
+    the container exits (one container runs one task, so there is
+    nothing to clean up across tasks). The path is keyed by the task
+    file's name so a stray host-side invocation can't collide with an
+    unrelated task's marker.
+    """
+    return Path("/tmp") / f"cloude-dod-pending.{Path(task_file).name}"
