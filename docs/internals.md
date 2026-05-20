@@ -540,3 +540,29 @@ exports inside the container).
   `make clean` — teardown. `clean-volume` erases saved credentials;
   `clean-dind-data` removes every per-task `cloude-dind-*` volume
   (image caches inside containers).
+
+## Test suite
+
+The Python helpers in `bin/` are tested under `tests/`. Run the suite
+with `make test` (which depends on `make sync` so the host venv is up
+to date) or directly with `.venv-host/bin/python -m pytest`. The same
+command runs in `.github/workflows/test.yml` on every pull request and
+push to `master`.
+
+Two layers, sharing one `conftest.py`:
+
+- **In-process unit tests** import `cloude_org` directly and call its
+  functions (parse / iterate / mark / append / set-verdict). The
+  no-extension scripts in `bin/` are loaded via the `import_script`
+  fixture (a `SourceFileLoader` shim) when a single helper is worth
+  unit-testing without spawning a subprocess.
+- **Subprocess tests** spawn the script under `.venv-host/bin/python`
+  via the `run_script` fixture, feed stdin / args, and assert on the
+  exit code, on stdout, and on side effects against a `task_file_factory`
+  fixture that writes throwaway task `.org` files into `tmp_path/tasks/active/`.
+
+Out of scope (intentionally): the bash helpers (`cloude-finalize-cleanup`,
+`cloude-promote-setup`, `cloude-run`, `cloude-prefill-prompt`,
+`cloude-open-task-file`, `cloude-python`); the curses rendering and
+inotify watcher in `cloude-dash` (the pure data layer is covered); and
+any real Docker / tmux / `gh` side effects.

@@ -1,0 +1,23 @@
+#+TITLE: Staging fixture
+#+TODO: TODO(t) WAITING(w) | DONE(d)
+
+* Example project
+  :PROPERTIES:
+  :REPO: https://github.com/example/example
+  :END:
+** First idea
+** Second idea
+   :PROPERTIES:
+   :ADOPT: https://github.com/example/example/pull/99
+   :END:
+
+* No-review project
+  :PROPERTIES:
+  :REPO:        https://github.com/example/no-review
+  :SKIP_REVIEW: t
+  :END:
+** Third idea
+
+* Personal todos
+** TODO Buy groceries
+** WAITING On reply from someone

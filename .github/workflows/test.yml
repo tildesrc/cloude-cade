@@ -1,0 +1,30 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          # Pin the same uv version used locally so `uv sync --frozen`
+          # interprets the lockfile identically.
+          version: "0.11.14"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync host venv
+        run: make sync
+
+      - name: Run pytest
+        run: make test

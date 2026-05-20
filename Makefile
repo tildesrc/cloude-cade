@@ -11,7 +11,7 @@ HOST_GID := $(shell id -g)
 # container can't shadow /opt/cloude-venv/.
 HOST_VENV := .venv-host
 
-.PHONY: help build rebuild shell login info sync clean-image clean-volume clean-dind-data clean-venv clean
+.PHONY: help build rebuild shell login info sync test clean-image clean-volume clean-dind-data clean-venv clean
 
 help:
 	@echo "Targets:"
@@ -19,7 +19,8 @@ help:
 	@echo "  rebuild       Build with --no-cache"
 	@echo "  shell         Open a bash shell in a transient container"
 	@echo "  login         Run claude interactively to perform first-time login"
-	@echo "  sync          Build the host venv ($(HOST_VENV)/) from uv.lock"
+	@echo "  sync          Build the host venv ($(HOST_VENV)/) from uv.lock (incl. dev deps)"
+	@echo "  test          Run the pytest suite under tests/"
 	@echo "  info          Show image and volume status"
 	@echo "  clean-image   Remove the image"
 	@echo "  clean-volume  Remove the credentials volume (forces re-login)"
@@ -64,6 +65,9 @@ info:
 
 sync:
 	UV_PROJECT_ENVIRONMENT=$(HOST_VENV) uv sync --frozen --no-install-project
+
+test: sync
+	$(HOST_VENV)/bin/python -m pytest
 
 clean-image:
 	-docker image rm $(IMAGE)
