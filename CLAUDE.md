@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo holds the user's personal tools for parallelizing and managing
 development with Claude Code. See `README.md` for the current description
-of the repo and the task workflow.
+of the repo and the task workflow. The agent-facing wiring reference —
+helper bin/ scripts, in-container hooks, container internals, the active
+task properties drawer schema — lives in `docs/internals.md`.
 
 ## Keep README.md current
 

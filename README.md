@@ -50,7 +50,8 @@ make login       # interactive claude login — do this once per workstation
 
 After `make login` exits, your Claude credentials live in the
 `cloude-claude-creds` Docker volume and persist across every task and
-restart, so you won't need to log in again.
+restart, so you won't need to log in again. Run `make help` for the
+rest of the targets (rebuild, clean, etc.).
 
 ### The workflow at a glance
 
@@ -193,11 +194,10 @@ See [Dashboard](#dashboard) for the full key list.
 ### Where to go next
 
 - [Workflow states](#workflow-states) — what each TODO keyword means.
-- [Lifecycle](#lifecycle) — the same path, in reference form.
 - [Slash commands](#slash-commands) — full detail on `/promote`,
   `/advance`, `/babysit-ci`, `/finalize`, and the rest.
-- [Running tasks in Docker](#running-tasks-in-docker) — how the
-  per-task container is wired up.
+- [`docs/internals.md`](docs/internals.md) — the agent-facing wiring
+  reference (helper scripts, in-container hooks, container internals).
 
 ## Task tracking
 
@@ -225,6 +225,12 @@ tasks/
   file (see below), so org-mode's logbook captures every state transition.
 - **One file per task** means each agent edits its own file. Concurrent
   agents updating their own tasks don't conflict.
+
+Each active task file's heading carries a properties drawer with
+metadata (`:REPO:`, `:BRANCH:`, `:WORKTREE:`, `:PR:`, etc.) that the
+agent fills in as the task progresses. You normally don't hand-edit
+those fields — see [`docs/internals.md`](docs/internals.md) for the
+full schema.
 
 ### Workflow states
 
@@ -264,13 +270,6 @@ The agent flips its own tag as it transitions between working, waiting
 on the user, and waiting on something external. It does **not** advance
 the TODO state itself (except `MERGING → COMPLETE`) — that's the user's
 call.
-
-### Stage details and tag defaults
-
-Per-stage responsibilities, definition of done, and `:agent:` /
-`:user:` / `:blocked:` defaults are the agent's canonical spec — they
-live in `CLAUDE.md` so they get loaded automatically into every Claude
-session.
 
 ### staging.org structure
 
@@ -319,48 +318,6 @@ falling back to a default `TODO` section. `/promote` skips them:
 
 You can delete TODOs when finished — there's no separate
 "completed" pile for them.
-
-### Active task properties
-
-Each active task file's top-level heading carries a properties drawer
-with the metadata needed to act on the task without hunting:
-
-| Property         | Meaning                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| `:ID:`           | Stable task identifier, matches the filename (`YYYY-MM-DD-<slug>`). |
-| `:REPO:`         | GitHub repo the task lives in. Carried from the staging project. |
-| `:BRANCH:`       | Feature branch name in the repo.                                |
-| `:WORKTREE:`     | Local git worktree path where the agent works.                  |
-| `:PR:`           | Pull request URL once the draft PR exists.                      |
-| `:AGENT:`        | Link to the agent session driving the task.                     |
-| `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
-| `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION_PR:` | *(optional)* URL of a related PR this task pairs with — e.g., an acme-webapp companion to an acme-service PR. Used when work spans two PRs that should land together. |
-
-`:ID:` and `:REPO:` are set when the task is promoted from staging.
-The rest are filled in as the task progresses (branch + worktree at
-the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
-whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
-`:COMPANION_PR:` are set by `/promote` when the situation applies
-(`:SKIP_REVIEW:` whenever the staging project carries it); they're
-omitted on ordinary tasks.
-
-### Lifecycle
-
-1. Capture the idea in `tasks/staging.org` as a sub-heading under the right
-   project (create the project heading if it doesn't exist yet).
-2. When ready to start, run `/promote` (see "Slash commands" below).
-   The skill walks through staging interactively, then sets up the
-   active task file, a feature branch, a worktree under `worktrees/`, a draft
-   PR, and a detached tmux session. Initial state is `PLANNING` with
-   the `:user:` tag — the task is waiting for the user's planning
-   prompt.
-3. Update the TODO keyword as the task moves through stages, and flip
-   the `:agent:`/`:user:` tag as the agent moves between working and
-   waiting.
-4. When the task reaches `COMPLETE`, move the file into
-   `tasks/completed/`; when it reaches `DROPPED`, move the file into
-   `tasks/dropped/`. Filename unchanged in either case.
 
 ## Dashboard
 
@@ -433,83 +390,18 @@ launcher is `uv` — it handles the `orgparse` install transparently.
 If `uv` isn't available, `pip install --user orgparse` then run the
 script with `python3`.
 
-## Running tasks in Docker
+## Per-repo pre-launch hooks
 
-Each active task can be run inside a sandboxed Docker container with
-`claude --dangerously-skip-permissions`, so the agent can act without
-per-tool permission prompts while staying isolated from the host.
-
-The container:
-
-- Runs Claude Code as an unprivileged `cloude` user whose UID/GID match
-  the invoking host user (so files written through bind mounts are
-  owned correctly on the host).
-- Has Docker-in-Docker (DinD), so `docker compose` works inside. Each
-  task gets its own `cloude-dind-<slug>` volume backing
-  `/var/lib/docker` — necessary because nested `overlay2` on the
-  container's own overlay layer hits whiteout permission errors, and
-  because multiple in-flight tasks can't share one docker data dir
-  (dockerd holds an exclusive lock). The volume persists across
-  restarts of the same task to cache pulled images.
-- Persists Claude credentials/history in a named volume
-  (`cloude-claude-creds`), so login is required only once per
-  workstation.
-- Inherits git, gh, and docker-registry auth read-only from the host's
-  `~/.gitconfig`, `~/.config/gh`, and `~/.docker/config.json` (the
-  docker config mount is optional — skipped if absent). Mounting
-  `~/.docker/config.json` lets the in-container `docker pull` reach
-  private registries the host is logged into (e.g. ghcr.io).
-- The host's `GH_TOKEN` env var is forwarded into the container (when
-  set) so `gh` and the git credential helper baked into
-  `/etc/gitconfig` can authenticate against GitHub for HTTPS `git
-  fetch`/`push`. SSH-form remotes are not supported inside the
-  container (no SSH keys mounted); `/promote` clones via HTTPS to
-  avoid this.
-- Mounts the cloude repo at the same absolute path it has on the host
-  (read-only) plus rw overlays for the task's source clone, worktree,
-  and active `.org` file. Other tasks remain read-only.
-
-### One-time setup
-
-```sh
-make build       # build the image (takes a few minutes the first time)
-make login       # run claude interactively to perform the first-time login
-```
-
-After `make login` exits, credentials live in the `cloude-claude-creds`
-volume and persist across runs.
-
-### Launching a task
-
-`/promote` automatically starts the container in the task's tmux
-session. To launch (or relaunch) by hand:
-
-```sh
-bin/cloude-run <worktree-abs-path> <task-file-abs-path>
-```
-
-Both arguments are absolute paths the caller already has — `cloude-run`
-doesn't look up tasks by slug or parse org files.
-
-The `cloude-<slug>` tmux session `/promote` creates carries
-`CLOUDE_TASK_FILE` in its session environment — the absolute path of
-the task's active `.org` file. It's inherited by every pane, so the
-host shell left behind once `cloude-run` exits still knows which task
-the session belongs to (matching the `CLOUDE_TASK_FILE` `cloude-run`
-exports inside the container).
-
-### Per-repo pre-launch hooks
-
-Some projects ship config that doesn't behave inside the container —
-plugin entries pointing at host binaries, project skills that depend
-on external services, etc. To shape the worktree before the container
-starts, drop an executable script at:
+Some projects ship config that doesn't behave inside the per-task
+container — plugin entries pointing at host binaries, project skills
+that depend on external services, etc. To shape the worktree before
+the container starts, drop an executable script at:
 
 ```
 repo-hooks/<repo-name>          (e.g. repo-hooks/acme-webapp)
 ```
 
-`cloude-run` invokes the hook (if present and executable) with cwd =
+The launcher invokes the hook (if present and executable) with cwd =
 the worktree, just before launching the container. The hook gets these
 env vars:
 
@@ -526,274 +418,87 @@ hide the change from `git status` via `git update-index
 `index` and `info/exclude`, so these changes are isolated to the one
 worktree.
 
-### In-container hooks
-
-`docker/cloude-settings.json` registers Claude Code hooks that fire
-inside the container, keeping the task heading's TODO keyword and
-who-has-the-ball tag in sync with what the agent is actually doing:
-
-- **`PostToolUse:ExitPlanMode` → `bin/cloude-on-plan-accepted`.** When
-  the user accepts a plan in plan mode and the task is in `PLANNING`,
-  writes the accepted plan into the task file's `** Plan` section,
-  flips the heading to `ITERATING :agent:`, and arms the DoD marker
-  (see the Stop hook below) so the next `Stop` fires its reminder
-  once. Lets the agent start implementing on its next turn without a
-  separate `/advance` step.
-- **`UserPromptSubmit` → `bin/cloude-on-user-prompt`.** Fires at the
-  start of every agent turn. If the task is in an in-flight stage
-  (PLANNING / ITERATING / REVIEW / MERGING) with tag `:user:`, flips
-  it to `:agent:` — the user has just handed the ball back, so the
-  agent is now the one working. Matters most for `PLANNING`, which is
-  *born* `:user:` and has no other transition into it: without this
-  hook a long planning turn would show a stale `:user:` on the
-  dashboard the whole time. `:blocked:` is left untouched (set
-  deliberately, not cleared by a stray prompt) and the hook never
-  blocks a prompt.
-- **`Stop` → `bin/cloude-on-stop`.** Fires at the end of every agent
-  turn and does two distinct jobs. *Tag maintenance:* if the task is
-  in PLANNING or ITERATING with tag `:agent:`, flips it to `:user:`
-  deterministically — the end-of-turn counterpart to
-  `cloude-on-user-prompt`'s `:user:` -> `:agent:` flip. `:blocked:` is
-  never touched (a deliberate state); REVIEW and MERGING are skipped
-  too (REVIEW defaults to `:blocked:` and MERGING is agent-driven —
-  `/babysit-merge` owns its tag). *DoD reminder:* blocks the stop
-  once and injects the current stage's Definition of Done — **but
-  only** on turns that began with a stage transition or an `/iterate`,
-  not on ordinary conversational turns. Those transition turns drop a
-  per-task marker file (in `/tmp`); `cloude-task-set-state` arms it on
-  every `--todo` change into an in-flight stage, and this hook
-  consumes it. `stop_hook_active` bounds the block to once per stop
-  cycle. *Background-work carve-out:* the hook is a full no-op (no tag
-  flip, no DoD reminder, the marker stays armed for next turn)
-  whenever the agent is still waiting on background work it kicked
-  off. Two signals each suffice: a `/babysit-ci` or `/babysit-merge`
-  state file in the worktree (`.cloude-babysit-*-state.json`), and an
-  in-flight background Bash detected by scanning the transcript JSONL
-  for a `run_in_background: true` start without a matching completion
-  `task-notification`. The transcript scan generalizes the babysit
-  carve-out to every background Bash the agent launches, so the
-  dashboard accurately shows `:agent:` while the agent is genuinely
-  waiting on its own work.
-
-`cloude-on-user-prompt`, `cloude-on-stop`, `cloude-on-plan-accepted`,
-and `cloude-task-set-state` all share parsing and the DoD-marker path
-helper through `bin/cloude_org.py`. Unlike the org-reading helper
-scripts, those scripts deliberately *don't* use `orgparse`: Claude
-Code's hook runner executes them on plain stdlib `python3`, not
-through `uv`, so a third-party import would fail — and a one-line
-heading grammar is well within reach of a regex anyway.
-
-The settings file is baked into the image (Dockerfile `COPY
-docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced
-to the in-container `claude` via `--settings
-/etc/cloude/settings.json` (added by `bin/cloude-run`). The hook
-scripts themselves live in `bin/` and are read via the read-only
-bind mount of the cloude repo, so editing them needs no image
-rebuild — only changes to `cloude-settings.json` do.
-
-### Make targets
-
-- `make build` / `make rebuild` — build (cached) / rebuild (no cache).
-- `make shell` — bash shell in a transient container, for debugging the
-  image without a real task.
-- `make login` — interactive `claude` in a clean container; first-time
-  login flow.
-- `make info` — image and volume status.
-- `make clean-image` / `make clean-volume` / `make clean-dind-data` /
-  `make clean` — teardown. `clean-volume` erases saved credentials;
-  `clean-dind-data` removes every per-task `cloude-dind-*` volume
-  (image caches inside containers).
-
 ## Slash commands
 
-Project-scoped slash commands live in `.claude/commands/`. Available
-commands:
+Project-scoped slash commands live in `.claude/commands/`. The ones
+you invoke by hand:
+
+**Host-side** (run from your host Claude session, in the cloude repo):
 
 - **`/promote`** — Promote an idea from `tasks/staging.org` into an
-  active task. Interactive: lists ideas grouped by project, asks which
-  to promote, auto-slugs the heading. Two modes:
-  - **Standard**: creates the active task file under `tasks/active/`,
-    a `cloude/<slug>` branch in the project's repo off the default
-    branch, a worktree under `worktrees/<repo-name>/<slug>`, a draft
-    PR, and a detached tmux session named `cloude-<slug>`. Starts in
-    `PLANNING :user:`. The new container's Claude Code input box is
-    pre-filled with the promoted staging entry as a planning prompt,
-    left unsent — press Enter to start, or edit it first (see
-    `cloude-prefill-prompt` under [Helper scripts in
-    `bin/`](#helper-scripts-in-bin)).
-  - **ADOPT**: triggered when the staging idea is `ADOPT <PR url>`.
-    No new branch or PR — checks out the existing PR's branch as a
-    worktree, uses the PR's title for the task heading, and starts in
-    `ITERATING :user:` so the user can direct the agent on what to do
-    with the adopted work. Refuses to adopt closed/merged or
-    cross-repository (forked) PRs.
-
-  Source clones are kept in `repos/<repo-name>` (auto-cloned on first
-  use); worktrees share that clone's git object store. Both `repos/`
-  and `worktrees/` are gitignored.
-
-  If the staging project carries `:SKIP_REVIEW: t`, `/promote` copies
-  that property into the new task file's properties drawer so the
-  repo's peer-review opt-out travels with the task.
-- **`/advance`** *(in-container)* — Advance the task's TODO keyword
-  forward to the next workflow stage (`PLANNING → ITERATING →
-  REVIEW → MERGING → COMPLETE`, or `ITERATING → MERGING` directly
-  when the task's `:SKIP_REVIEW:` property is set — see [Workflow
-  states](#workflow-states)). Loads the current stage's
-  Definition of Done from `CLAUDE.md`, evaluates each item
-  (programmatically where it can — PR exists, CI status, git
-  clean — and via the agent's judgment for the rest), and
-  complains (lists unmet items + asks for explicit confirm)
-  before the transition lands. Only edits `$CLOUDE_TASK_FILE`;
-  the host sees the diff afterward.
-- **`/iterate`** *(in-container)* — Flip the TODO keyword back to
-  `ITERATING` (with `:agent:` tag). Used when review comments come
-  in on a `REVIEW` PR, or a `MERGING` task hits a merge break. No
-  preconditions; mechanical.
-- **`/drop`** *(in-container)* — Flip the TODO keyword to
-  `DROPPED` (with `:user:` tag) from any non-terminal state.
-  Refuses to drop from `COMPLETE` (work already landed); no-op
-  from `DROPPED`. Reminds the agent that the host now needs
-  `/sweep` (or `/finalize` directly) to do the actual cleanup.
-- **`/babysit-ci`** *(in-container)* — Monitor CI on the task's PR
-  autonomously after a push. Push-driven: kicks off `gh pr checks
-  --watch` as a background bash; the harness fires a new turn when
-  the watch returns. On that turn, the agent reads the result —
-  **green flips the heading tag to `:user:` and stops** (does not
-  auto-advance the TODO state — advancing forward is user-driven),
-  failures get diagnosed, fixed (commit + push), and watched again.
-  **Merge conflicts** against the base branch are also part of the
-  job: the agent merges the latest base in, resolves trivial
-  conflicts (lockfiles, append-only, formatting), and re-pushes —
-  bailing to `:user:` only when a conflict genuinely needs human
-  judgment. Budgets: 2h wall-clock, 3 post-fix retries per failing
-  check (and per conflict cycle). On bail, flips the heading tag to
-  `:user:` so the user knows attention is needed. Zero token cost
-  during the watch — Claude is fully idle until CI ends.
-- **`/babysit-merge`** *(in-container)* — MERGING-stage equivalent
-  of `/babysit-ci`. Adds the PR to the repo's merge queue, watches
-  via background bash, re-queues on transient ejections — "keep
-  re-adding until it merges." On a successful merge, **auto-advances
-  the heading to `COMPLETE :user:`** (the one forward transition
-  CLAUDE.md designates agent-advanceable, since `/sweep` on the host
-  then surfaces it for `/finalize`). On any blocking condition
-  (failing required check, requested changes, merge conflict, branch
-  protection refusal), **kicks the task back to `ITERATING :user:`**
-  with a one-paragraph explanation appended to `** Notes` —
-  conflict resolution is `/babysit-ci`'s job during ITERATING, not
-  this skill's. Budget: 2h wall-clock; no fixed cap on re-queue
-  attempts.
+  active task. Interactive: lists ideas grouped by project, asks
+  which to promote, auto-slugs the heading. Standard mode creates a
+  `cloude/<slug>` branch, a worktree under
+  `worktrees/<repo-name>/<slug>`, a draft PR, and a detached
+  `cloude-<slug>` tmux session — starts in `PLANNING :user:`, with
+  the container's Claude Code input box pre-filled with the staging
+  entry as the planning prompt. If the staging idea is `ADOPT <PR
+  url>`, switches to **ADOPT mode**: no new branch or PR, checks out
+  the existing PR's branch and starts in `ITERATING :user:` so you
+  can direct the agent on what to do with the adopted work.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,
-  prompts you per-task with `Approve /finalize for <task>? [y/N/skip]`
-  and only invokes `/finalize` on an explicit `y`. Quick to run (one
-  line of output when nothing's pending), so safe to drive on a `/loop`
-  poll (e.g. `/loop 1m /sweep`) in your main host session.
+  prompts `Approve /finalize for <task>? [y/N/skip]` and only invokes
+  `/finalize` on an explicit `y`. Quick to run (one line of output
+  when nothing's pending), so safe to drive on a `/loop` poll (e.g.
+  `/loop 1m /sweep`) in your main host session.
 - **`/finalize`** — Finalize an active task and perform the cleanup
   the in-container agent can't do (the cloude repo is mounted ro from
   inside the container). Interactive: lists active tasks with their
   current TODO state, asks which to finalize. For `COMPLETE`,
   verifies the PR is merged, kills the tmux session, removes the
-  worktree, removes the task's `cloude-dind-<slug>` DinD volume,
-  deletes the local branch, and moves the task file to
-  `tasks/completed/`. For `DROPPED`, closes the PR, kills the tmux
-  session, removes the worktree, removes the DinD volume, preserves
-  the local branch, and moves the file to `tasks/dropped/`.
-  Force-drop is allowed from any non-terminal state; force-complete
-  is not (COMPLETE requires the agent to have verified the merge).
+  worktree and the task's DinD volume, deletes the local branch, and
+  moves the task file to `tasks/completed/`. For `DROPPED`, closes
+  the PR, kills the tmux session, removes the worktree and DinD
+  volume, preserves the local branch, and moves the file to
+  `tasks/dropped/`. Force-drop is allowed from any non-terminal
+  state; force-complete is not (COMPLETE requires the agent to have
+  verified the merge).
 
-### Helper scripts in `bin/`
+**In-container** (run from inside the task's tmux session):
 
-`/promote`, `/sweep`, `/finalize`, and the in-container state-flip
-commands (`/advance`, `/iterate`, `/drop`, `/babysit-ci`,
-`/babysit-merge`) are thin wrappers around a small set of `bin/`
-orchestrators — the skills shell out to these instead of parsing or
-rewriting `.org` files themselves, so the structural reading and
-writing of org files lives in one place. Each script is callable by
-hand too (e.g. for scripting outside the skills, or when debugging).
-Scripts that *read* `.org` files parse them with `orgparse` via a
-PEP 723 inline-deps header (same pattern as `bin/cloude-dash`) and
-are intended to be run via `uv` — see the Dashboard section for the
-`orgparse` install story. The one script that only *edits* a
-heading (`cloude-task-set-state`) uses a single regex, needs no
-dependency, and runs on plain `python3`.
+- **`/advance`** — Advance the task's TODO keyword forward to the
+  next workflow stage (`PLANNING → ITERATING → REVIEW → MERGING →
+  COMPLETE`, or `ITERATING → MERGING` directly when the task's
+  `:SKIP_REVIEW:` property is set — see [Workflow
+  states](#workflow-states)). Surfaces the current stage's Definition
+  of Done and complains if anything's unmet before performing the
+  transition.
+- **`/iterate`** — Flip the TODO keyword back to `ITERATING` (with
+  `:agent:` tag). Used when review comments come in on a `REVIEW`
+  PR, or a `MERGING` task hits a merge break.
+- **`/drop`** — Flip the TODO keyword to `DROPPED` (with `:user:`
+  tag) from any non-terminal state. Refuses to drop from `COMPLETE`
+  (work already landed); reminds you that the host now needs
+  `/sweep` (or `/finalize` directly) to do the actual cleanup.
+- **`/babysit-ci`** — Monitor CI on the task's PR autonomously after
+  a push. Push-driven: kicks off `gh pr checks --watch` as a
+  background job; the agent wakes when the watch returns. Green
+  flips the heading tag to `:user:` and stops (forward TODO
+  transitions are user-driven); failures get diagnosed, fixed,
+  pushed, and watched again. **Merge conflicts** against the base
+  branch are also part of the job: the agent merges the latest base
+  in, resolves trivial conflicts (lockfiles, append-only,
+  formatting), and re-pushes — bailing to `:user:` only when a
+  conflict genuinely needs human judgment. Zero token cost during
+  the watch — Claude is fully idle until CI ends.
+- **`/babysit-merge`** — MERGING-stage equivalent of `/babysit-ci`.
+  Adds the PR to the repo's merge queue, watches via background job,
+  re-queues on transient ejections — "keep re-adding until it
+  merges." On a successful merge, **auto-advances the heading to
+  `COMPLETE :user:`** (the one forward transition the agent owns,
+  since `/sweep` on the host then surfaces it for `/finalize`). On
+  any blocking condition (failing required check, requested changes,
+  merge conflict, branch protection refusal), **kicks the task back
+  to `ITERATING :user:`** with a one-paragraph explanation appended
+  to `** Notes` — conflict resolution is `/babysit-ci`'s job during
+  ITERATING, not this skill's.
 
-- **`cloude-list-staging`** — Print promotable ideas from
-  `tasks/staging.org` numbered globally, plus a trailing
-  `TODO_PROJECTS <n>` count of personal-TODO projects (no `:REPO:`)
-  that `/promote` skips. With `--select N`, instead emits the chosen
-  idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
-  `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines, so `/promote` can
-  `eval` it rather than re-parsing staging.org. (`SKIP_REVIEW` carries
-  the project heading's optional `:SKIP_REVIEW:` property.) Used by
-  `/promote` step 1.
-- **`cloude-list-active`** — Print active tasks under
-  `tasks/active/`, numbered, sorted by stage priority (matching the
-  dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
-  `--terminal`, filters to `COMPLETE`/`DROPPED`; if the filtered set
-  is empty, prints exactly `No tasks awaiting finalize.` and exits 0
-  — this is `/sweep`'s idle-tick output and what makes a `/loop
-  /sweep` cheap. Used by `/sweep` and `/finalize` step 1.
-- **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
-  lines for the heading TODO/tag/text, the properties drawer
-  (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `SKIP_REVIEW` / `COMPANION_PR` when present), and derived fields (`SLUG`,
-  `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
-  `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
-  `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
-  skills at their read-the-task-file step. Exit 3 names the missing
-  key when a required property is absent.
-- **`cloude-task-set-state <task-file> [--todo NAME] [--tag NAME]`** —
-  Rewrite the first heading of a task file in place: `--todo` swaps
-  the TODO keyword, `--tag` replaces the entire trailing tag chain
-  with one tag; an omitted flag leaves that part untouched. The
-  heading text and everything below are preserved. This is the one
-  place the task-heading edit is spelled out — the `/advance`,
-  `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge` skills and
-  `cloude-finalize-cleanup`'s force-drop all call it instead of
-  re-deriving the rewrite. Prints the resulting `TODO` / `TAG`.
-  Regex-based, no dependency, runs on plain `python3`.
-- **`cloude-promote-setup`** — Bash orchestrator for `/promote`
-  steps 4-9: ensure source clone, create worktree + branch, push
-  (standard) or fetch (ADOPT), open draft PR (standard only),
-  render task file from `tasks/TEMPLATE.org`, remove staging entry,
-  start tmux session, and — in standard mode — queue the staging
-  entry to pre-fill the container's input box via
-  `cloude-prefill-prompt`. Distinct non-zero exit codes per failure
-  mode (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal,
-  20 tmux collision, 30 arg validation) and a "Succeeded so far"
-  trail on stderr.
-- **`cloude-prefill-prompt <tmux-session> <prompt-file>`** —
-  Best-effort background poller that pre-fills a freshly promoted
-  task's Claude Code input box. Launched detached by
-  `cloude-promote-setup` (standard mode only): it watches the task's
-  tmux pane until Claude Code's interactive input box is ready, then
-  *pastes* the prompt in — a bracketed paste, so a multi-line staging
-  entry lands as unsent input rather than submitting on the first
-  newline. Readiness is detected from the bracketed-paste-enable
-  escape (`ESC[?2004h`) in the pane's raw output stream, captured via
-  `tmux pipe-pane` — this keys on the exact terminal capability the
-  paste relies on and is independent of any on-screen wording. On
-  timeout, a vanished session, or any tmux error it just leaves the
-  box empty; it never blocks or fails the promote. Env knobs:
-  `CLOUDE_NO_PREFILL` (set non-empty to opt out) and
-  `CLOUDE_PREFILL_TIMEOUT` (seconds to wait, default 300). Logs to
-  `/tmp/cloude-prefill-<slug>.log`.
-- **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
-  `/finalize` steps 4-10: verify/close PR, kill tmux, remove
-  worktree, remove DinD volume, delete branch (COMPLETE only), move
-  task file. Bails with distinct exit codes for the four
-  judgment-call cases:
-  - `10` — PR not in state `MERGED` (the agent set `COMPLETE`
-    prematurely).
-  - `11` — task TODO is not `COMPLETE`/`DROPPED`. Pass
-    `--force-drop` to flip to `DROPPED` and proceed.
-  - `12` — worktree dirty/locked. Pass `--force-worktree` to retry
-    with `git worktree remove --force`.
-  - `13` — DinD volume still in use. Pass `--skip-volume` to leave
-    it in place.
+## Internals
 
-  The skill is responsible for prompting the user and rerunning with
-  the matching override; the script itself has no interactive
-  fallback logic.
+For the agent-facing wiring details — the helper scripts the slash
+commands shell out to, the in-container hooks that keep the task
+heading in sync, the Docker container per task, the active task
+properties drawer schema — see [`docs/internals.md`](docs/internals.md).
+Humans normally don't need any of that.
