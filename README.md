@@ -182,14 +182,21 @@ See [Dashboard](#dashboard) for the full key list.
 4. **Plan.** Attach to the task's tmux session (`tmux attach -t
    cloude-<slug>`, or press `t` on the dashboard). The agent's input
    box comes pre-filled with the promoted staging entry as a planning
-   prompt — press Enter to start planning, or edit it first. A hook
-   flips the task to `:agent:` so the dashboard shows it's now
-   progressing on its own. When you approve its plan, another hook
-   flips the task to `ITERATING` automatically.
+   prompt — press Enter to start, or edit it first. The agent drafts a
+   plan and you iterate with it as a normal Claude Code conversation —
+   ask questions, push back on scope, redirect — over as many turns as
+   you need. Hooks flip the heading between `:agent:` (a turn is in
+   flight) and `:user:` (waiting on you), so the dashboard mirrors who
+   has the ball. When you accept the plan via Claude Code's plan-mode
+   confirmation, a hook flips the task to `ITERATING :agent:`
+   automatically and the agent starts implementing.
 5. **Iterate.** The agent implements the plan and pushes; `/babysit-ci`
-   watches CI after each push. When a stage's work is done the agent
-   flips its tag to `:user:` — that's your cue to run `/advance` to move
-   `ITERATING → REVIEW → MERGING`.
+   watches CI after each push. Same as in planning, you can converse
+   with the agent throughout — review what it's pushed, request
+   changes, redirect mid-implementation — and the heading tag flips
+   with each turn. When the work is done the agent flips its tag to
+   `:user:`, and that's your cue: either give it more feedback (back to
+   step 5) or run `/advance` to move `ITERATING → REVIEW → MERGING`.
 6. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
    auto-advances the task to `COMPLETE` once the PR lands.
 7. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
