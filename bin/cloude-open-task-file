@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Open a task .org file in a terminal editor — read-only, auto-reverting
+# on disk change. Intended as the command run inside the second tmux
+# window of a /promote'd task session (see bin/cloude-promote-setup
+# step 7), so the user can glance at the live task file alongside the
+# agent's pane.
+#
+# Editor selection order:
+#   1. emacs on PATH         — `emacs -nw` with read-only-mode +
+#                              auto-revert-mode set via --eval.
+#   2. $EDITOR is vim/nvim/vi — `-R` (read-only) plus autoread +
+#                              CursorHold checktime so the buffer
+#                              refreshes on idle.
+#   3. $EDITOR set to other  — best-effort `exec "$EDITOR" "$FILE"`
+#                              (read-only / auto-revert not enforced).
+#   4. neither               — print an error and exit 1.
+#
+# The task file is rewritten via atomic rename by cloude-task-set-state,
+# so an editor that polls by *path* (emacs auto-revert, vim checktime)
+# sees the new content; tools that hold the fd (`less +F`) would silently
+# show stale content and are intentionally not used as a fallback.
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <task-file-abs-path>
+EOF
+}
+
+if [[ $# -ne 1 ]]; then
+    usage >&2
+    exit 1
+fi
+
+TASK_FILE="$1"
+
+if [[ ! -f "$TASK_FILE" ]]; then
+    echo "$(basename "$0"): task file not found: $TASK_FILE" >&2
+    exit 1
+fi
+
+if command -v emacs >/dev/null 2>&1; then
+    exec emacs -nw "$TASK_FILE" \
+        --eval '(progn (read-only-mode 1) (auto-revert-mode 1))'
+fi
+
+if [[ -n "${EDITOR:-}" ]]; then
+    case "$(basename -- "$EDITOR")" in
+        vim|nvim|vi)
+            exec "$EDITOR" -R \
+                -c 'set autoread updatetime=1000' \
+                -c 'au CursorHold,CursorHoldI * silent! checktime' \
+                "$TASK_FILE"
+            ;;
+        *)
+            exec "$EDITOR" "$TASK_FILE"
+            ;;
+    esac
+fi
+
+echo "$(basename "$0"): no emacs on PATH and \$EDITOR is unset; install emacs or set \$EDITOR" >&2
+exit 1
