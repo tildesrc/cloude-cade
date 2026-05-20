@@ -16,7 +16,11 @@ The first form rewrites the level-1 stage heading:
                 On a transition, also appends a fresh log-entry skeleton
                 under `** Log` (with pre-seeded DoD checkboxes from
                 `cloude_org.STAGE_DOD`) and stamps :EXITED: + :DURATION:
-                on the previous entry.
+                on the previous entry. On a transition out of PLANNING
+                into any non-DROPPED stage, additionally auto-ticks the
+                "user has approved the plan" DoD bullet on the closing
+                PLANNING entry — the user's invocation of /advance or
+                /iterate from PLANNING is itself the approval.
   --tag  NAME   replace the entire trailing tag chain with a single
                 :NAME: tag.
   --via TEXT    text that goes into the new entry's :ENTERED_VIA: field
@@ -79,6 +83,7 @@ from cloude_org import (  # noqa: E402
     append_log_entry_skeleton,
     dod_marker_path,
     find_log_section,
+    mark_plan_approved,
     now_ts,
     set_dod_verdict,
 )
@@ -267,6 +272,19 @@ def main(argv: list[str]) -> int:
     line += match["nl"]
 
     content = content[: match.start()] + line + content[match.end() :]
+
+    # On a user-driven transition out of PLANNING (any non-DROPPED
+    # forward path — in practice /advance or /iterate from PLANNING),
+    # the act of invoking the command IS the user's approval of the
+    # plan. Auto-tick the canonical "user has approved" bullet on the
+    # closing PLANNING log entry so the audit trail reflects it without
+    # the agent having to ask. Runs before `append_log_entry_skeleton`
+    # so it lands on the still-latest PLANNING entry (the skeleton
+    # append makes the new stage entry the latest). `/drop` is excluded
+    # — dropping a task is abandonment, not approval. Helper is itself
+    # a no-op if the bullet is missing or already ticked.
+    if prev_todo == "PLANNING" and new_todo not in (None, "PLANNING", "DROPPED"):
+        content = mark_plan_approved(content)
 
     # On a real TODO transition (the keyword actually changed), also
     # append a fresh log-entry skeleton under ** Log so the per-stage

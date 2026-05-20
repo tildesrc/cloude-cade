@@ -32,3 +32,7 @@ Print one short summary:
 ```
 Re-entered ITERATING: <CURRENT_STATE> :<old-tag>:  →  ITERATING :<new-tag>:
 ```
+
+## Note: auto-tick from PLANNING
+
+When `/iterate` is invoked while the current state is `PLANNING`, `bin/cloude-task-set-state` additionally auto-ticks the "user has approved the plan" DoD checkbox on the closing PLANNING entry — the user's invocation of `/iterate` from PLANNING is itself the approval, the same way `/advance` is. No action needed from this skill.

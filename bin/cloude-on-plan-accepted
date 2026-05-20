@@ -5,13 +5,18 @@ When the user accepts a plan via Claude Code's plan mode, and the
 in-container task is in PLANNING state:
   1. Write the plan content into the task file's ** Plan section
      (insert if absent, replace if present).
-  2. Flip the heading's TODO PLANNING -> ITERATING and tag -> :agent:.
+  2. Auto-tick the "user has approved the plan" bullet on the closing
+     PLANNING log entry's DoD — accepting the plan in plan mode is
+     itself the user's approval, the same way /advance or /iterate
+     from PLANNING is.
+  3. Flip the heading's TODO PLANNING -> ITERATING and tag -> :agent:.
 
 The /advance skill's :agent:-tag rule then takes over and the agent
-begins implementing on its next turn. Together (1) + (2) leave the
-on-disk state matching what an explicit /advance from PLANNING would
-have produced: PLANNING's DoD ("plan is written into the task's org
-file") is satisfied without a separate human step.
+begins implementing on its next turn. Together (1) + (2) + (3) leave
+the on-disk state matching what an explicit /advance from PLANNING
+would have produced: PLANNING's DoD ("plan is written into the task's
+org file" and "user has approved the plan") is satisfied without a
+separate human step.
 
 Only fires when:
   - $CLOUDE_TASK_FILE is set and points to an existing file
@@ -33,7 +38,7 @@ from pathlib import Path
 # cloude-on-stop; cloude_org.py is a stdlib-only sibling module (see its
 # docstring for why the hooks can't depend on orgparse).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloude_org import dod_marker_path  # noqa: E402
+from cloude_org import dod_marker_path, mark_plan_approved  # noqa: E402
 
 
 def main() -> int:
@@ -53,6 +58,13 @@ def main() -> int:
 
     if plan:
         content = upsert_plan_section(content, plan)
+
+    # Plan-mode acceptance IS the user's approval of the plan — auto-tick
+    # the matching DoD bullet on the closing PLANNING entry so the audit
+    # trail records it, matching what /advance and /iterate from PLANNING
+    # do (both route through cloude-task-set-state, which calls the same
+    # helper). No-op if the bullet is absent or already ticked.
+    content = mark_plan_approved(content)
 
     content = flip_planning_to_iterating(content)
 

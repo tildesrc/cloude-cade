@@ -99,6 +99,13 @@ STAGE_DOD: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# The canonical text of the PLANNING DoD bullet that records the user's
+# approval of the plan. `mark_plan_approved` matches against this exact
+# string so it can be ticked automatically when the user triggers any
+# transition out of PLANNING (the trigger itself is the approval). Kept
+# as a derived constant so it can't drift from STAGE_DOD.
+PLAN_APPROVED_BULLET = STAGE_DOD["PLANNING"][1]
+
 # The first top-level heading of a task file: leading stars + space, a
 # non-space TODO keyword, optional heading text, an optional trailing
 # `:tag:chain:`, then the line end. The non-greedy `(.*?)` for the
@@ -399,6 +406,66 @@ def _format_cookie(checkboxes: list[str]) -> str:
     total = len(checkboxes)
     done = sum(1 for c in checkboxes if c in ("ticked", "na"))
     return f"[{done}/{total}]"
+
+
+def mark_plan_approved(content: str) -> str:
+    """Tick the `PLAN_APPROVED_BULLET` checkbox on the latest PLANNING entry.
+
+    The user invoking `/advance`, `/iterate`, or plan-mode accept while
+    a task is in PLANNING is itself the user's approval — there is no
+    separate "yes I approve" gesture to record. This helper updates
+    the closing PLANNING log entry's DoD body so the audit trail shows
+    that approval as ticked, and refreshes the `[N/M]` cookie on the
+    DoD heading to match.
+
+    No-op (returns content unchanged) when:
+      - there is no log entry,
+      - the latest entry is not for stage PLANNING,
+      - the entry has no `**** DoD` sub-sub-heading,
+      - the canonical bullet is absent from the DoD body, or
+      - the matching checkbox is already `[X]`/`[x]`/`[-]`.
+
+    Strict match against `PLAN_APPROVED_BULLET`: a customized bullet
+    is silently left alone (the customizer can tick by hand if they
+    want). The verdict keyword on the DoD heading is preserved.
+    """
+    entry = latest_log_entry(content)
+    if entry is None or entry["stage"] != "PLANNING" or entry["dod_span"] is None:
+        return content
+
+    dod_a, dod_b = entry["dod_span"]
+    dod_text = content[dod_a:dod_b]
+
+    # Tick the matching open checkbox, if any. Anchored on the exact
+    # bullet text and `[ ]` so an already-ticked / N/A entry is a no-op.
+    pattern = re.compile(
+        r"^(\s*-\s+)\[ \](\s+" + re.escape(PLAN_APPROVED_BULLET) + r")\s*$",
+        re.M,
+    )
+    new_dod_text, count = pattern.subn(r"\1[X]\2", dod_text, count=1)
+    if count == 0:
+        return content
+
+    # Recompute the [N/M] cookie on the heading line from the updated body.
+    first_line, sep, body_after = new_dod_text.partition("\n")
+    boxes: list[str] = []
+    for cb in _CHECKBOX_RE.finditer(body_after):
+        ch = cb.group(1)
+        if ch == " ":
+            boxes.append("open")
+        elif ch in ("X", "x"):
+            boxes.append("ticked")
+        elif ch == "-":
+            boxes.append("na")
+    new_cookie = _format_cookie(boxes)
+
+    heading_match = _DOD_HEADING_RE.match(first_line)
+    if heading_match:
+        verdict = heading_match.group(2) or "PENDING"
+        new_first_line = f"**** {new_cookie} {verdict} DoD"
+        new_dod_text = new_first_line + sep + body_after
+
+    return content[:dod_a] + new_dod_text + content[dod_b:]
 
 
 def append_log_entry_skeleton(
@@ -778,6 +845,63 @@ def _smoke() -> int:
     assert "*** [2026-05-20 Wed 13:00] MERGING (via /advance from ITERATING)" in appended
     assert "PENDING DoD" in appended
     p("skeleton append ok")
+
+    # mark_plan_approved: tick the canonical bullet on an open PLANNING
+    # entry; recompute the cookie; preserve the verdict keyword.
+    planning_sample = """\
+#+TITLE: t
+#+TODO: PLANNING ITERATING | COMPLETE
+#+TODO: PENDING UNSATISFIABLE | PASS
+
+* PLANNING title :user:
+  :PROPERTIES:
+  :ID: t
+  :END:
+
+** Log
+*** [2026-05-20 Wed 10:00] PLANNING (via /promote)
+    :PROPERTIES:
+    :STAGE:       PLANNING
+    :ENTERED:     [2026-05-20 Wed 10:00]
+    :ENTERED_VIA: /promote
+    :END:
+**** Request
+**** Work
+**** [0/3] PENDING DoD
+     - [ ] The plan is written into the task's org file.
+     - [ ] The user has approved the plan.
+     - [ ] A draft PR has been created on GitHub.
+"""
+    ticked_planning = mark_plan_approved(planning_sample)
+    assert "- [X] The user has approved the plan." in ticked_planning, ticked_planning
+    assert "**** [1/3] PENDING DoD" in ticked_planning, ticked_planning
+    # Other bullets untouched.
+    assert "- [ ] The plan is written into the task's org file." in ticked_planning
+    assert "- [ ] A draft PR has been created on GitHub." in ticked_planning
+    p("mark_plan_approved tick ok")
+
+    # mark_plan_approved: no-op on an already-ticked entry.
+    again = mark_plan_approved(ticked_planning)
+    assert again == ticked_planning, "second tick should be a no-op"
+    p("mark_plan_approved already-ticked no-op ok")
+
+    # mark_plan_approved: no-op when the latest entry is not PLANNING.
+    # `sample` (defined above) has PLANNING (PASS, closed) then ITERATING
+    # as the latest entry — even though PLANNING is present, the latest
+    # is ITERATING, so nothing should change.
+    non_planning_result = mark_plan_approved(sample)
+    assert non_planning_result == sample, "no-op when latest is not PLANNING"
+    p("mark_plan_approved non-PLANNING latest no-op ok")
+
+    # mark_plan_approved: no-op when the canonical bullet text is absent
+    # (a user customized the bullet wording).
+    customized = planning_sample.replace(
+        "- [ ] The user has approved the plan.",
+        "- [ ] User has signed off on the plan.",
+    )
+    custom_result = mark_plan_approved(customized)
+    assert custom_result == customized, "no-op when bullet text differs"
+    p("mark_plan_approved missing-bullet no-op ok")
 
     sys.stdout.write(out.getvalue())
     return 0
