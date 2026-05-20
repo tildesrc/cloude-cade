@@ -405,6 +405,18 @@ The container:
   fetch`/`push`. SSH-form remotes are not supported inside the
   container (no SSH keys mounted); `/promote` clones via HTTPS to
   avoid this.
+- The host's IANA timezone is forwarded as `TZ=<zone>` so in-container
+  timestamps (the task file's `** Log` entries, `date`, etc.) match
+  host-side `/promote` / `/finalize` stamps instead of mixing two
+  clocks in the same org file. The name is taken from `$TZ` if set,
+  otherwise derived by resolving `/etc/localtime`'s symlink target
+  and stripping everything up to and including `/zoneinfo/` (works on
+  Linux's `/usr/share/zoneinfo/...` and macOS's
+  `/var/db/timezone/zoneinfo/...`). The container ships
+  `tzdata`/`/usr/share/zoneinfo` via the `node:20-bookworm` base, so
+  setting `TZ` alone is enough — no bind mount of `/etc/localtime`,
+  no Dockerfile change. Hosts whose `/etc/localtime` isn't a symlink
+  and have no `$TZ` set silently fall back to UTC.
 - Mounts the cloude repo at the same absolute path it has on the host
   (read-only) plus rw overlays for the task's source clone, worktree,
   and active `.org` file. Other tasks remain read-only.
