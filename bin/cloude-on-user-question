@@ -29,6 +29,22 @@ Both directions:
   - NEVER block the tool call — exit 0 on every path, including
     failure of the underlying tag-flip helper (warnings to stderr).
 
+Unlike `cloude-on-stop`, this hook does NOT short-circuit when a
+`/babysit-ci` / `/babysit-merge` loop is in flight. The two situations
+are different: `cloude-on-stop` would otherwise flip `:agent:` ->
+`:user:` at end of turn and mislead the dashboard for the rest of the
+loop's run, so it deliberately stays out. An `AskUserQuestion` round
+trip is genuinely transient — the user really does have the ball
+while the question is open, and `post` restores `:agent:` once the
+answer arrives, preserving the loop's tag invariant. Skipping the
+round trip would instead *break* the dashboard, leaving `:user:`
+visible mid-question while a watcher is alive.
+
+Stage transitions (PLANNING/ITERATING etc.) arm a one-shot DoD
+marker via `cloude-task-set-state --todo`; this hook only passes
+`--tag`, so it never arms the marker and never triggers a spurious
+DoD reminder.
+
 Stdin (the PreToolUse / PostToolUse JSON payload) is drained but
 unused; the hook needs nothing from it.
 

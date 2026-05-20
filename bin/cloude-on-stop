@@ -1,27 +1,41 @@
 #!/usr/bin/env python3
-"""Stop hook handler — nudge the agent off `:agent:` at end of turn.
+"""Stop hook handler — keep the heading tag honest, check the DoD sparingly.
 
-Fires at the end of every agent turn. If the in-container task is in
-an in-flight stage (PLANNING / ITERATING / REVIEW / MERGING) with the
-heading tag `:agent:`, blocks the stop ONCE and injects a reminder
-listing that stage's Definition of Done plus the available
-tag-flipping outcomes.
+Fires at the end of every agent turn. It does two distinct jobs, and
+the split between them is the whole point of this hook:
+
+1. Deterministic tag maintenance. When a turn ends with the task in
+   PLANNING or ITERATING still tagged `:agent:`, the agent has handed
+   the ball back, so the tag is flipped to `:user:`. This is
+   mechanical — the agent never retags by hand — and it is the
+   end-of-turn counterpart to `cloude-on-user-prompt`'s start-of-turn
+   `:user:` -> `:agent:` flip. `:blocked:` is never touched (a
+   deliberate state the agent may set to keep the ball off the user);
+   MERGING is never touched (agent-driven — `/babysit-merge` owns it).
+
+2. A Definition-of-Done reminder, but only at the end of a turn that
+   began with a stage transition or an `/iterate`. Those turns drop a
+   marker file (see `cloude_org.dod_marker_path`); this hook consumes
+   the marker and, only then, blocks the stop once to inject the
+   current stage's DoD checklist. An ordinary conversational turn
+   drops no marker, so it gets no block and no reminder text crowding
+   out the agent's actual answer.
+
+If an autonomous babysit loop (`/babysit-ci` or `/babysit-merge`) is
+running — detected by its state file in the worktree — this hook does
+nothing at all: that loop owns the heading for its whole duration.
 
 The single-block-per-stop guarantee comes from honoring the harness's
-`stop_hook_active` flag: when set, this hook silently allows the stop,
-so the model cannot get stuck in a block loop.
+`stop_hook_active` flag: when set, the DoD reminder is skipped, so the
+model cannot get stuck in a block loop.
+
+Everything else is a silent no-op (no task file, unparseable heading,
+a terminal COMPLETE / DROPPED stage, an active babysit loop).
 
 Why this exists: `bin/cloude-dash` color-codes every active task by
-`:agent:` / `:user:` / `:blocked:`. A stuck `:agent:` silently lies to
-the dashboard and hides a task that actually needs user attention.
-
-Only fires when:
-  - stop_hook_active is false
-  - $CLOUDE_TASK_FILE is set and points to an existing file
-  - the heading's current TODO keyword is PLANNING / ITERATING /
-    REVIEW / MERGING (terminal states get no nudge)
-  - the heading's tag chain includes `agent`
-Other cases are silent no-ops.
+`:agent:` / `:user:` / `:blocked:`. A stale `:agent:` silently lies to
+the dashboard and hides a task that actually needs user attention —
+job 1 keeps that honest without nagging the agent on every turn.
 
 Registered via /etc/cloude/settings.json, which bin/cloude-run wires
 in by passing `--settings /etc/cloude/settings.json` to claude.
@@ -32,14 +46,33 @@ The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-# The heading parser is shared with bin/cloude-on-user-prompt; both
-# hooks run on plain stdlib python3, so it lives in a sibling module
-# rather than orgparse (see cloude_org.py for the full rationale).
+# The heading parser and the marker-path helper are shared with the
+# sibling hook scripts; all run on plain stdlib python3, so they live
+# in `cloude_org.py` rather than orgparse (see that module for the
+# full rationale).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloude_org import parse_heading  # noqa: E402
+from cloude_org import ball_tag, dod_marker_path, parse_heading  # noqa: E402
+
+# In-flight stages — the terminal COMPLETE / DROPPED states get neither
+# a tag flip nor a DoD reminder.
+IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+
+# Stages whose `:agent:` tag is flipped to `:user:` at end of turn.
+# REVIEW sits at `:blocked:` by default and MERGING is agent-driven
+# (`/babysit-merge` owns its tag), so neither is auto-handed-back.
+AUTO_HANDBACK = ("PLANNING", "ITERATING")
+
+# Babysit-loop state files, relative to the worktree. The skills create
+# them on start and delete them on clean exit / bail; their presence
+# means an autonomous loop owns the heading and this hook stays out.
+BABYSIT_STATE_FILES = (
+    ".cloude-babysit-state.json",
+    ".cloude-babysit-merge-state.json",
+)
 
 
 DOD = {
@@ -71,9 +104,6 @@ def main() -> int:
     except (ValueError, AttributeError):
         hook_input = {}
 
-    if hook_input.get("stop_hook_active"):
-        return 0
-
     task = os.environ.get("CLOUDE_TASK_FILE")
     if not task or not Path(task).is_file():
         return 0
@@ -83,52 +113,106 @@ def main() -> int:
         return 0
 
     state, tags = parsed
-    if state not in DOD or "agent" not in tags:
+    if state not in IN_FLIGHT:
+        return 0  # terminal stage — nothing to maintain
+
+    # An autonomous babysit loop owns the heading while it runs; don't
+    # flip the tag or block the stop out from under it.
+    if babysit_loop_active(hook_input.get("cwd")):
         return 0
 
-    print(json.dumps({"decision": "block", "reason": build_reason(state)}))
+    # The marker pertains only to the turn that just ended; consume it
+    # now (read-then-unlink) so it can never linger into a later turn.
+    marker = dod_marker_path(task)
+    marker_armed = marker.exists()
+    marker.unlink(missing_ok=True)
+
+    ball = ball_tag(tags)
+
+    # DoD reminder: only when this turn began with a transition /
+    # `/iterate` (marker armed), only while the agent still holds the
+    # ball, and only once per stop cycle (honor `stop_hook_active`).
+    if (
+        marker_armed
+        and ball == "agent"
+        and state in DOD
+        and not hook_input.get("stop_hook_active")
+    ):
+        print(json.dumps({"decision": "block", "reason": build_reason(state)}))
+        return 0
+
+    # Deterministic hand-back: the agent stopped holding the ball in a
+    # user-driven stage, so flip it to `:user:` for the dashboard.
+    if ball == "agent" and state in AUTO_HANDBACK:
+        flip_to_user(task)
     return 0
 
 
+def babysit_loop_active(cwd: str | None) -> bool:
+    """True when a `/babysit-ci` or `/babysit-merge` loop is running.
+
+    Detected by the state file the skills keep in the worktree (created
+    on start, deleted on clean exit / bail). `cwd` is the Stop hook
+    input's working directory — the in-container `claude` runs in the
+    task worktree, so the state files sit directly under it. A missing
+    `cwd` just means we can't tell; treat that as "not active".
+    """
+    if not cwd:
+        return False
+    return any((Path(cwd) / name).is_file() for name in BABYSIT_STATE_FILES)
+
+
+def flip_to_user(task: str) -> None:
+    """Flip the heading tag to `:user:` via the shared set-state helper.
+
+    Keeps the structural heading rewrite in `cloude-task-set-state`, its
+    one canonical home. Passing only `--tag` leaves the TODO keyword and
+    heading text untouched (and drops no DoD marker — only a `--todo`
+    transition does that). A failed flip is warned to stderr and
+    otherwise ignored: it must never block the stop.
+    """
+    helper = Path(__file__).resolve().with_name("cloude-task-set-state")
+    try:
+        subprocess.run(
+            [sys.executable, str(helper), task, "--tag", "user"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        sys.stderr.write(f"cloude-on-stop: tag flip failed: {detail}\n")
+
+
 def build_reason(state: str) -> str:
+    """The DoD reminder injected once at the end of a transition turn."""
     bullets = "\n".join(f"  - {b}" for b in DOD[state])
 
     if state == "MERGING":
-        forward_action = (
-            "  - If the DoD is met (PR is merged): run `/advance` to move\n"
-            "    to `COMPLETE :user:`. MERGING → COMPLETE is the one\n"
-            "    agent-driven forward transition.\n"
+        tail = (
+            "MERGING is agent-driven: invoke `/babysit-merge` to drive the\n"
+            "merge queue through to a landed PR. That skill owns the\n"
+            "heading tag for the MERGING stage — not this hook."
         )
     else:
-        forward_action = (
-            f"  - If the DoD is met: flip the heading tag from `:agent:`\n"
-            f"    to `:user:` by editing `$CLOUDE_TASK_FILE` directly.\n"
-            f"    Forward transitions out of {state} are user-driven, so\n"
-            f"    do NOT `/advance` yourself — just hand the ball back.\n"
+        tail = (
+            f"If `{state}`'s work isn't finished, keep going. If it is,\n"
+            f"just stop — this hook hands the ball back to the user for\n"
+            f"you, so you don't need to retag the heading by hand. To\n"
+            f"keep the ball off the user (waiting on something external),\n"
+            f"set the heading tag to `:blocked:` yourself."
         )
 
     return (
-        f"You're about to stop with the task heading still tagged `:agent:`\n"
-        f"in `{state}`. That misleads `bin/cloude-dash`, which uses the\n"
-        f"tag to show the user who has the ball — a stuck `:agent:` hides\n"
-        f"a task that may actually be waiting on them.\n"
-        f"\n"
-        f"Before you stop, walk through `{state}`'s Definition of Done:\n"
+        f"This turn began with a transition into `{state}` (or an "
+        f"`/iterate`).\n"
+        f"Before it ends, walk through `{state}`'s Definition of Done:\n"
         f"{bullets}\n"
         f"\n"
-        f"Then pick the outcome that matches reality:\n"
-        f"{forward_action}"
-        f"  - If you're pausing for user input or a judgment call (DoD\n"
-        f"    not met, but you need the user): flip `:agent:` → `:user:`.\n"
-        f"  - If you're waiting on something external (peer review,\n"
-        f"    long-running CI): flip `:agent:` → `:blocked:`.\n"
-        f"  - If you're actually still actively working: keep `:agent:`\n"
-        f"    and continue. This block fires only once per stop cycle,\n"
-        f"    so a deliberate re-stop will go through unblocked.\n"
+        f"{tail}\n"
         f"\n"
-        f"Edit the heading directly in `$CLOUDE_TASK_FILE` to retag. From\n"
-        f"`ITERATING` you can also use `/iterate --tag user` or\n"
-        f"`/iterate --tag blocked` as a shortcut."
+        f"(This DoD reminder fires once per stop cycle, and only on\n"
+        f"transition / `/iterate` turns — never on an ordinary turn.)"
     )
 
 

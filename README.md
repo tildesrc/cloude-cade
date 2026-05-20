@@ -158,7 +158,7 @@ session are all named after — to the system clipboard, ready to paste
 into a command.
 
 ```sh
-bin/cloude-dash    # p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
+bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
@@ -406,6 +406,16 @@ the highlighted task's PR in the default browser, `t` switches to its
 dashboard is already inside tmux, otherwise `tmux attach`), `r`
 reloads, `q` quits.
 
+Press `/` to enter search-as-you-type mode. The status line shows the
+query as you type; rows are filtered fzf-style to those whose title
+contains the query (case-insensitive substring), and surviving section
+headers show `(matched/total)` so you can see what's been filtered out.
+`↑`/`↓` still navigate the filtered list while typing. `Esc` clears
+the query and exits search mode; `Enter` locks the filter, restoring
+the normal keymap (`j`/`k`/`p`/`t`/`c`/`g`/`G`/`r`) over the filtered
+set — `Esc` while locked clears the filter, and `/` from a locked
+filter starts a fresh query.
+
 The dashboard auto-reloads (via inotify) whenever a task file changes,
 and a reload can reorder rows — a stage transition re-sorts a task
 within ACTIVE, a new task can appear above it, or it can move into
@@ -524,9 +534,11 @@ who-has-the-ball tag in sync with what the agent is actually doing:
 
 - **`PostToolUse:ExitPlanMode` → `bin/cloude-on-plan-accepted`.** When
   the user accepts a plan in plan mode and the task is in `PLANNING`,
-  writes the accepted plan into the task file's `** Plan` section and
-  flips the heading to `ITERATING :agent:`. Lets the agent start
-  implementing on its next turn without a separate `/advance` step.
+  writes the accepted plan into the task file's `** Plan` section,
+  flips the heading to `ITERATING :agent:`, and arms the DoD marker
+  (see the Stop hook below) so the next `Stop` fires its reminder
+  once. Lets the agent start implementing on its next turn without a
+  separate `/advance` step.
 - **`UserPromptSubmit` → `bin/cloude-on-user-prompt`.** Fires at the
   start of every agent turn. If the task is in an in-flight stage
   (PLANNING / ITERATING / REVIEW / MERGING) with tag `:user:`, flips
@@ -538,15 +550,22 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   deliberately, not cleared by a stray prompt) and the hook never
   blocks a prompt.
 - **`Stop` → `bin/cloude-on-stop`.** Fires at the end of every agent
-  turn. If the task is in an in-flight stage (PLANNING / ITERATING /
-  REVIEW / MERGING) with tag `:agent:`, blocks the stop once and
-  reminds the agent of that stage's Definition of Done plus the
-  available tag-flipping outcomes (`:user:` / `:blocked:` / keep
-  `:agent:` and continue). Honors `stop_hook_active` to block only
-  once per stop cycle. The entry-direction counterpart to
-  `cloude-on-user-prompt`; together they keep the `bin/cloude-dash`
-  dashboard honest about which tasks are actually still being worked
-  vs. waiting on the user.
+  turn and does two distinct jobs. *Tag maintenance:* if the task is
+  in PLANNING or ITERATING with tag `:agent:`, flips it to `:user:`
+  deterministically — the end-of-turn counterpart to
+  `cloude-on-user-prompt`'s `:user:` -> `:agent:` flip. `:blocked:` is
+  never touched (a deliberate state); REVIEW and MERGING are skipped
+  too (REVIEW defaults to `:blocked:` and MERGING is agent-driven —
+  `/babysit-merge` owns its tag). *DoD reminder:* blocks the stop
+  once and injects the current stage's Definition of Done — **but
+  only** on turns that began with a stage transition or an `/iterate`,
+  not on ordinary conversational turns. Those transition turns drop a
+  per-task marker file (in `/tmp`); `cloude-task-set-state` arms it on
+  every `--todo` change into an in-flight stage, and this hook
+  consumes it. `stop_hook_active` bounds the block to once per stop
+  cycle. If a `/babysit-ci` or `/babysit-merge` loop is running
+  (detected by its `.cloude-babysit-*-state.json` in the worktree),
+  the whole hook is a no-op — the autonomous loop owns the heading.
 - **`PreToolUse:AskUserQuestion` / `PostToolUse:AskUserQuestion` →
   `bin/cloude-on-user-question pre` / `… post`.** Manages the tag
   around an `AskUserQuestion` wait window — neither `Stop` nor
@@ -554,18 +573,21 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   the tool call, and the answer comes back as a tool result rather
   than a fresh prompt), so without this hook the tag stays `:agent:`
   while the user is being asked something. `pre` flips `:agent:` →
-  `:user:` just before the question is shown; `post` flips `:user:`
-  → `:agent:` once the answer arrives. Only acts on in-flight stages
-  and leaves `:blocked:` alone. Never blocks the tool call — exits 0
-  on every path, including a tag-flip helper failure.
+  `:user:` just before the question is shown; `post` flips `:user:` →
+  `:agent:` once the answer arrives. Only acts on in-flight stages,
+  leaves `:blocked:` alone, and ignores babysit loop state (the round
+  trip restores `:agent:` so the loop's tag invariant is preserved).
+  Never blocks the tool call — exits 0 on every path, including a
+  tag-flip helper failure.
 
-`cloude-on-user-prompt`, `cloude-on-stop`, and `cloude-on-user-question`
-all read the task heading (TODO keyword + tag) to decide whether to
-act; that parsing is shared in `bin/cloude_org.py`. Unlike the org-reading helper
-scripts, the hooks deliberately *don't* use `orgparse`: Claude Code's
-hook runner executes them on plain stdlib `python3`, not through
-`uv`, so a third-party import would fail — and a one-line heading
-grammar is well within reach of a regex anyway.
+`cloude-on-user-prompt`, `cloude-on-stop`, `cloude-on-plan-accepted`,
+`cloude-on-user-question`, and `cloude-task-set-state` all share
+parsing and the DoD-marker path helper through `bin/cloude_org.py`.
+Unlike the org-reading helper scripts, those scripts deliberately
+*don't* use `orgparse`: Claude Code's hook runner executes them on
+plain stdlib `python3`, not through `uv`, so a third-party import
+would fail — and a one-line heading grammar is well within reach of a
+regex anyway.
 
 The settings file is baked into the image (Dockerfile `COPY
 docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced

@@ -40,7 +40,17 @@ import shlex
 import sys
 from pathlib import Path
 
+# `dod_marker_path` is shared with the cloude-on-stop / cloude-on-plan-
+# accepted hooks. cloude_org.py is a stdlib-only sibling module (see its
+# docstring for why the hook scripts can't depend on orgparse).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import dod_marker_path  # noqa: E402
+
 TODO_KEYWORDS = ("PLANNING", "ITERATING", "REVIEW", "MERGING", "COMPLETE", "DROPPED")
+# The in-flight (non-terminal) stages. A `--todo` change into one of
+# these is a stage transition that should arm the next `Stop`'s DoD
+# reminder; COMPLETE / DROPPED are terminal and arm nothing.
+IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
 BALL_TAGS = ("agent", "user", "blocked")
 
 # The first heading of a task file: leading stars + space, a known
@@ -156,6 +166,19 @@ def main(argv: list[str]) -> int:
 
     content = content[: match.start()] + line + content[match.end() :]
     path.write_text(content)
+
+    # A `--todo` change into an in-flight stage is a stage transition —
+    # this is the single chokepoint /advance and /iterate both pass
+    # through. Drop the DoD marker so the next `Stop` fires its reminder
+    # exactly once. Best-effort: a marker failure must never fail the
+    # heading edit (which has already been written above).
+    if new_todo in IN_FLIGHT:
+        try:
+            dod_marker_path(task_file).touch()
+        except OSError as exc:
+            sys.stderr.write(
+                f"cloude-task-set-state: could not write DoD marker: {exc}\n"
+            )
 
     print(f"TODO={shlex.quote(todo)}")
     print(f"TAG={shlex.quote(_ball_tag(tag_chain))}")
