@@ -94,7 +94,11 @@ dependency, and runs on plain `python3`.
   render task file from `tasks/TEMPLATE.org`, remove staging entry,
   start tmux session, and — in standard mode — queue the staging
   entry to pre-fill the container's input box via
-  `cloude-prefill-prompt`. Distinct non-zero exit codes per failure
+  `cloude-prefill-prompt`. The tmux session is created with two
+  windows: window 0 (`agent`, selected by default) runs
+  `bin/cloude-run`; window 1 (`task`) runs
+  `bin/cloude-open-task-file` as a read-only live view of the
+  task's `.org` file. Distinct non-zero exit codes per failure
   mode (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal,
   20 tmux collision, 30 arg validation) and a "Succeeded so far"
   trail on stderr.
@@ -114,6 +118,20 @@ dependency, and runs on plain `python3`.
   `CLOUDE_NO_PREFILL` (set non-empty to opt out) and
   `CLOUDE_PREFILL_TIMEOUT` (seconds to wait, default 300). Logs to
   `/tmp/cloude-prefill-<slug>.log`.
+- **`cloude-open-task-file <task-file-abs-path>`** — Editor
+  launcher for the `task` window of the per-task tmux session.
+  Picks an editor by this order: `emacs` on `PATH` (terminal mode
+  via `-nw`, with `read-only-mode` and `auto-revert-mode` enabled
+  via `--eval`); else `$EDITOR` if its basename is `vim` / `nvim` /
+  `vi` (`-R` for read-only, `autoread` + a `CursorHold` `checktime`
+  autocmd for on-disk-change refresh); else a generic `exec
+  "$EDITOR" "$FILE"` (no enforced read-only / auto-revert); else
+  print an error and `exit 1`. The `; exec bash` wrapper in the
+  caller (`cloude-promote-setup`) keeps the window alive at a
+  shell on the error path. Atomic-rename-aware: `less +F` is
+  intentionally **not** used as a fallback because it holds the
+  pre-rename inode and would silently show stale content as
+  `cloude-task-set-state` rewrites the file.
 - **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
   `/finalize` steps 4-10: verify/close PR, kill tmux, remove
   worktree, remove DinD volume, delete branch (COMPLETE only), move

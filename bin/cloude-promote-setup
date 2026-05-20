@@ -14,7 +14,10 @@
 #   5. Render the task file from tasks/TEMPLATE.org with the right
 #      properties / TODO keyword / tag for the mode.
 #   6. Remove the chosen sub-heading + body from tasks/staging.org.
-#   7. Create the detached tmux session that runs bin/cloude-run.
+#   7. Create the detached tmux session with two windows: window 0
+#      (`agent`) runs bin/cloude-run; window 1 (`task`) runs
+#      bin/cloude-open-task-file as a read-only live view of the
+#      task .org file. The `agent` window is left selected.
 #   8. Print a summary block on stdout.
 #
 # Exit codes:
@@ -484,6 +487,16 @@ if ! tmux new-session -d -s "$TMUX_SESSION" -c "$WORKTREE" \
     bail 20 "tmux new-session failed"
 fi
 record "Created tmux session $TMUX_SESSION"
+
+# Second window: a live, read-only view of the task .org file. The
+# helper picks emacs > vim/nvim/vi > generic $EDITOR; if none is
+# available it prints an error and the `; exec bash` tail keeps the
+# window at a shell so the user can fix their env.
+tmux rename-window -t "$TMUX_SESSION:0" agent
+tmux new-window -t "$TMUX_SESSION:" -c "$WORKTREE" -n task \
+    "$CLOUDE_ROOT/bin/cloude-open-task-file $TASK_FILE; exec bash"
+tmux select-window -t "$TMUX_SESSION:0"
+record "Added task editor window to $TMUX_SESSION"
 
 # Pre-fill the new container's Claude Code input box with the promoted
 # staging entry (standard mode only — ADOPT tasks start in ITERATING,

@@ -177,12 +177,17 @@ See [Dashboard](#dashboard) for the full key list.
    planning agent will start from.
 3. **Promote it.** Run `/promote` from your host Claude session. It
    creates the active task file, a `cloude/<slug>` branch, a worktree, a
-   draft PR, and a detached `cloude-<slug>` tmux session. The task starts
-   in `PLANNING :user:` — waiting for you.
+   draft PR, and a detached `cloude-<slug>` tmux session with two
+   windows: window 0 (`agent`) runs the per-task container, window 1
+   (`task`) opens the task's `.org` file in a read-only,
+   auto-reverting terminal editor (`emacs -nw`, else `$EDITOR`). The
+   task starts in `PLANNING :user:` — waiting for you.
 4. **Plan.** Attach to the task's tmux session (`tmux attach -t
-   cloude-<slug>`, or press `t` on the dashboard). The agent's input
-   box comes pre-filled with the promoted staging entry as a planning
-   prompt — press Enter to start, or edit it first. The agent drafts a
+   cloude-<slug>`, or press `t` on the dashboard); the `agent` window
+   is selected by default, `Ctrl-b 1` switches to the live task-file
+   view. The agent's input box comes pre-filled with the promoted
+   staging entry as a planning prompt — press Enter to start, or edit
+   it first. The agent drafts a
    plan and you iterate with it as a normal Claude Code conversation —
    ask questions, push back on scope, redirect — over as many turns as
    you need. Hooks flip the heading between `:agent:` (a turn is in
