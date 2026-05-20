@@ -256,8 +256,8 @@ dependency, and runs on plain `python3`.
 - **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
   `/finalize` steps 4-10: verify/close PR, kill tmux, remove
   worktree, remove DinD volume, delete branch (COMPLETE only), move
-  task file. Bails with distinct exit codes for the four
-  judgment-call cases:
+  task file. Bails with distinct exit codes for the judgment-call
+  cases:
   - `10` — PR not in state `MERGED` (the agent set `COMPLETE`
     prematurely).
   - `11` — task TODO is not `COMPLETE`/`DROPPED`. Pass
@@ -266,6 +266,13 @@ dependency, and runs on plain `python3`.
     with `git worktree remove --force`.
   - `13` — DinD volume still in use. Pass `--skip-volume` to leave
     it in place.
+  - `14` — worktree contains files owned by another user (typically
+    root, from in-container DinD test runs that bind-mount the
+    worktree); the host user can't unlink them. Pass `--force-root`
+    to nuke the dir via `docker run --rm --user root … rm -rf`
+    (implies `--force-worktree`). The script reports the
+    foreign-owned file count so the user can gauge the scope before
+    authorizing.
 
   The skill is responsible for prompting the user and rerunning with
   the matching override; the script itself has no interactive
