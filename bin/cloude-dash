@@ -371,7 +371,16 @@ def _copy_to_clipboard(text: str) -> str | None:
     if cmd is None:
         return None
     try:
-        r = subprocess.run(cmd, input=text, text=True, capture_output=True)
+        # stdout/stderr go to DEVNULL (not PIPE) so the clipboard
+        # daemon that xclip/xsel fork to keep the X selection alive
+        # cannot inherit pipe fds we'd then block reading until EOF.
+        r = subprocess.run(
+            cmd,
+            input=text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except OSError:
         return None
     return cmd[0] if r.returncode == 0 else None
