@@ -55,7 +55,7 @@ Some items can be checked programmatically; others need your judgment:
 - **PLANNING**
   - "The plan is written into the task's org file" — check that the task file has substantive content under `** Plan` (or comparable section), not just the template placeholder text.
   - "A draft PR has been created on GitHub" — check that `:PR:` is set in the properties drawer and the URL is reachable: `gh pr view <pr-url> --json number,state` succeeds.
-  - "The user has approved the plan" — judgment; look back through your recent turns. If unclear, ask the user.
+  - "The user has approved the plan" — *auto-satisfied*. The act of the user invoking `/advance` while a task is in PLANNING IS the approval, and `bin/cloude-task-set-state` auto-ticks the matching DoD checkbox on the closing PLANNING entry as part of the transition. Don't pre-verify, don't ask the user, and don't flag it as unmet in step 5.
 - **ITERATING**
   - "The plan is implemented in code" — judgment, with help from `git -C <worktree> log -p origin/<base>..HEAD` to see what's actually in the diff.
   - "New and relevant tests pass locally" — judgment based on what you've actually run this session.

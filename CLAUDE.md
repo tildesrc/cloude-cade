@@ -108,7 +108,12 @@ is mechanical and won't enforce it.
 
 **Definition of done**
 - The plan is written into the task's org file.
-- The user has approved the plan.
+- The user has approved the plan. *Auto-ticked* when the user
+  triggers a transition out of PLANNING — `/advance`, `/iterate`,
+  or plan-mode acceptance. The act of pulling that trigger is
+  itself the approval, so the matching DoD checkbox is ticked by
+  `bin/cloude-task-set-state` (or `bin/cloude-on-plan-accepted`)
+  rather than by the agent.
 - A draft PR has been created on GitHub.
 
 #### ITERATING
@@ -237,7 +242,12 @@ Lifecycle:
   stage-DoD bullet.
 - `/advance` and `/iterate` (and `/drop`) flip the level-1 stage and
   also append a fresh entry skeleton via `bin/cloude-task-set-state`,
-  stamping `:EXITED:` and `:DURATION:` on the previous entry.
+  stamping `:EXITED:` and `:DURATION:` on the previous entry. On a
+  transition out of PLANNING into any non-DROPPED stage, the helper
+  additionally auto-ticks the "user has approved the plan" DoD bullet
+  on the closing PLANNING entry — invoking the command is itself the
+  approval, so the agent doesn't tick that one by hand. Plan-mode
+  acceptance (`bin/cloude-on-plan-accepted`) does the same.
 - The agent fills `**** Request` / `**** Work` as the stage
   progresses, ticks (`[X]`) or marks N/A (`[-]`) each DoD checkbox
   as it's resolved, and flips the verdict via:
