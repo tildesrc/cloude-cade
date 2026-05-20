@@ -49,16 +49,21 @@ Common required args:
 Common optional args:
   --skip-review                  repo opts out of peer review; render
                                  :SKIP_REVIEW: t into the task file
+  --companion-task <id>          sibling cloude task ID (slug-dated form);
+                                 render :COMPANION_TASK: <id> into the
+                                 task file's properties drawer
+
+Common args (both modes):
+  --heading <text>               idea heading (becomes the task title and,
+                                 in standard mode, the planning prompt)
 
 Standard-mode args:
-  --heading <text>               idea heading (becomes the task title)
   --default-branch <branch>      base branch for the new PR
 
 ADOPT-mode args:
   --head-ref <ref>               existing PR's branch
   --base-ref <ref>               existing PR's base branch
   --pr-url <url>
-  --pr-title <text>              becomes the task title
   --pr-number <n>
 EOF
 }
@@ -75,9 +80,9 @@ DEFAULT_BRANCH=""
 HEAD_REF=""
 BASE_REF=""
 PR_URL=""
-PR_TITLE=""
 PR_NUMBER=""
 SKIP_REVIEW=""
+COMPANION_TASK=""
 
 if [[ $# -eq 0 ]]; then
     usage >&2
@@ -96,9 +101,9 @@ while (($#)); do
         --head-ref)          HEAD_REF="$2"; shift 2 ;;
         --base-ref)          BASE_REF="$2"; shift 2 ;;
         --pr-url)            PR_URL="$2"; shift 2 ;;
-        --pr-title)          PR_TITLE="$2"; shift 2 ;;
         --pr-number)         PR_NUMBER="$2"; shift 2 ;;
         --skip-review)       SKIP_REVIEW=1; shift ;;
+        --companion-task)    COMPANION_TASK="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         *) echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 30 ;;
     esac
@@ -117,17 +122,16 @@ require --slug "$SLUG"
 require --repo-url "$REPO_URL"
 require --task-file "$TASK_FILE"
 require --staging-heading "$STAGING_HEADING"
+require --heading "$HEADING"
 
 case "$MODE" in
     standard)
-        require --heading "$HEADING"
         require --default-branch "$DEFAULT_BRANCH"
         ;;
     adopt)
         require --head-ref "$HEAD_REF"
         require --base-ref "$BASE_REF"
         require --pr-url "$PR_URL"
-        require --pr-title "$PR_TITLE"
         ;;
     *)
         echo "ERROR: --mode must be 'standard' or 'adopt' (got: $MODE)" >&2
@@ -279,9 +283,9 @@ if [[ "$MODE" == "standard" ]]; then
     NOTES_PRELUDE=""
 else
     NEW_TODO="ITERATING"
-    NEW_HEADING="$PR_TITLE"
+    NEW_HEADING="$HEADING"
     ADOPTED_LINE="  :ADOPTED:  t"
-    NOTES_PRELUDE="Adopted from PR $PR_URL — original heading: ADOPT $PR_URL"
+    NOTES_PRELUDE="Adopted from PR $PR_URL"
 fi
 
 # --skip-review applies to both modes: the repo opts out of peer review.
@@ -290,16 +294,25 @@ if [[ -n "$SKIP_REVIEW" ]]; then
     SKIP_REVIEW_LINE="  :SKIP_REVIEW:  t"
 fi
 
+# --companion-task applies to both modes: render :COMPANION_TASK: <id>
+# into the new task file's properties drawer, same way :SKIP_REVIEW:
+# is handled.
+COMPANION_TASK_LINE=""
+if [[ -n "$COMPANION_TASK" ]]; then
+    COMPANION_TASK_LINE="  :COMPANION_TASK: $COMPANION_TASK"
+fi
+
 if ! python3 - <<'PY' \
         "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
         "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
-        "$SKIP_REVIEW_LINE" "$NOTES_PRELUDE"
+        "$SKIP_REVIEW_LINE" "$COMPANION_TASK_LINE" "$NOTES_PRELUDE"
 import re
 import sys
 from pathlib import Path
 
 (_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
- pr_url, adopted_line, skip_review_line, notes_prelude) = sys.argv
+ pr_url, adopted_line, skip_review_line, companion_task_line,
+ notes_prelude) = sys.argv
 
 text = Path(tmpl).read_text()
 
@@ -351,6 +364,18 @@ if skip_review_line:
     text = re.sub(
         r"^(\s*:END:\s*)$",
         skip_review_line + "\n" + r"\g<1>",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+# 4c. --companion-task: insert :COMPANION_TASK: <id> just before :END:
+#     of the properties drawer. Absent by default — only added when
+#     the staging idea carried a :COMPANION_TASK: property.
+if companion_task_line:
+    text = re.sub(
+        r"^(\s*:END:\s*)$",
+        companion_task_line + "\n" + r"\g<1>",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -430,14 +455,11 @@ if [[ ! -f "$STAGING" ]]; then
     bail 14 "staging file not found: $STAGING"
 fi
 
-# Standard mode pre-fills the new container's Claude Code input box
-# with the promoted staging entry. Capture that entry's body text into
-# a temp file as it's removed below; step 6b assembles the prompt from
-# it. ADOPT mode leaves this empty (no planning prompt to seed).
-STAGING_BODY_FILE=""
-if [[ "$MODE" == "standard" ]]; then
-    STAGING_BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-staging-body.XXXXXX")"
-fi
+# Both modes pre-fill the new container's Claude Code input box with
+# the promoted staging entry. Capture that entry's body text into a
+# temp file as it's removed below; step 6b assembles the prompt from
+# it.
+STAGING_BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-staging-body.XXXXXX")"
 
 if ! python3 - "$STAGING" "$STAGING_HEADING" "$STAGING_BODY_FILE" <<'PY'
 import sys
@@ -485,9 +507,24 @@ for j in range(start + 1, len(lines)):
 
 # Capture the entry's body (everything below the heading line, up to
 # the block end) before deleting it, so the prefill can include it.
+# Strip any :PROPERTIES: ... :END: drawer (now used to carry :ADOPT:
+# and :COMPANION_TASK: triggers — those don't belong in the prompt).
 # Dedent the org indentation and trim surrounding blank lines.
 if body_out is not None:
-    entry_body = textwrap.dedent("".join(lines[start + 1:end])).strip("\n")
+    body_lines = lines[start + 1:end]
+    in_drawer = False
+    kept = []
+    for line in body_lines:
+        stripped = line.strip()
+        if not in_drawer and stripped.upper() == ":PROPERTIES:":
+            in_drawer = True
+            continue
+        if in_drawer:
+            if stripped.upper() == ":END:":
+                in_drawer = False
+            continue
+        kept.append(line)
+    entry_body = textwrap.dedent("".join(kept)).strip("\n")
     Path(body_out).write_text(entry_body)
 
 del lines[start:end]
@@ -505,21 +542,16 @@ record "Removed staging entry"
 # task, and for anything bigger the user edits it before pressing
 # Enter. bin/cloude-prefill-prompt (launched in step 7) pastes it into
 # the new container's Claude Code input box, unsent.
-PROMPT_FILE=""
-if [[ "$MODE" == "standard" ]]; then
-    PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-prefill-prompt.XXXXXX")"
-    {
-        printf '%s\n' "$HEADING"
-        if [[ -n "$STAGING_BODY_FILE" && -s "$STAGING_BODY_FILE" ]]; then
-            printf '\n'
-            cat "$STAGING_BODY_FILE"
-            printf '\n'
-        fi
-    } >"$PROMPT_FILE"
-fi
-if [[ -n "$STAGING_BODY_FILE" ]]; then
-    rm -f "$STAGING_BODY_FILE"
-fi
+PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-prefill-prompt.XXXXXX")"
+{
+    printf '%s\n' "$HEADING"
+    if [[ -n "$STAGING_BODY_FILE" && -s "$STAGING_BODY_FILE" ]]; then
+        printf '\n'
+        cat "$STAGING_BODY_FILE"
+        printf '\n'
+    fi
+} >"$PROMPT_FILE"
+rm -f "$STAGING_BODY_FILE"
 
 # --- Step 7: create tmux session -------------------------------------------
 
@@ -547,18 +579,19 @@ tmux select-window -t "$TMUX_SESSION:0"
 record "Added task editor window to $TMUX_SESSION"
 
 # Pre-fill the new container's Claude Code input box with the promoted
-# staging entry (standard mode only — ADOPT tasks start in ITERATING,
-# not PLANNING, so there's no planning prompt to seed). Detached and
-# best-effort: cloude-prefill-prompt polls the tmux pane in the
-# background and removes $PROMPT_FILE itself when done, so /promote
-# returns immediately; if the container never reaches the input box
-# the box is simply left empty.
+# staging entry. Applies to both modes — in standard mode this is the
+# planning prompt; in ADOPT mode it's the user's direction about what
+# to do with the adopted PR. Detached and best-effort:
+# cloude-prefill-prompt polls the tmux pane in the background and
+# removes $PROMPT_FILE itself when done, so /promote returns
+# immediately; if the container never reaches the input box the box is
+# simply left empty.
 PREFILL_QUEUED=""
-if [[ "$MODE" == "standard" && -n "$PROMPT_FILE" && -s "$PROMPT_FILE" ]]; then
+if [[ -n "$PROMPT_FILE" && -s "$PROMPT_FILE" ]]; then
     setsid "$CLOUDE_ROOT/bin/cloude-prefill-prompt" \
         "$TMUX_SESSION" "$PROMPT_FILE" </dev/null >/dev/null 2>&1 &
     PREFILL_QUEUED=1
-    record "Queued planning-prompt prefill for $TMUX_SESSION"
+    record "Queued prompt prefill for $TMUX_SESSION"
 fi
 
 # --- Step 8: summary -------------------------------------------------------
@@ -590,9 +623,13 @@ EOF
 fi
 
 if [[ -n "$PREFILL_QUEUED" ]]; then
-    echo "Planning prompt: queued to pre-fill the container's Claude Code input box — attach and press Enter to start planning (or edit the prompt first)."
+    echo "Prompt: queued to pre-fill the container's Claude Code input box — attach and press Enter to send (or edit the prompt first)."
 fi
 
 if [[ -n "$SKIP_REVIEW" ]]; then
     echo "Peer review: skipped — :SKIP_REVIEW: t set; /advance skips the REVIEW stage (ITERATING → MERGING)."
+fi
+
+if [[ -n "$COMPANION_TASK" ]]; then
+    echo "Companion task: :COMPANION_TASK: $COMPANION_TASK rendered into the task file."
 fi

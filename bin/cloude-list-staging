@@ -17,8 +17,10 @@
 #   - Top-level headings with a :REPO: property are promotable projects;
 #     their sub-headings are listed (numbered globally so /promote can
 #     index by integer).
-#   - [ADOPT] suffix is appended when the idea heading starts with
-#     "ADOPT " (the ADOPT-mode trigger documented in promote.md).
+#   - [ADOPT] suffix is appended when the idea heading carries an
+#     :ADOPT: property in its properties drawer (the ADOPT-mode
+#     trigger documented in promote.md). Heading text is free-form
+#     in either mode; mode is determined by property presence.
 #   - TODO_PROJECTS gives the count of top-level headings without
 #     :REPO: (personal-TODO projects, not promotable). /promote uses
 #     it to print the one-line "(TODO-project ideas omitted)" notice
@@ -31,12 +33,16 @@
 #   REPO=https://github.com/owner/repo
 #   HEADING=<exact idea heading text>
 #   MODE=<standard|adopt>
-#   PR_URL=<adopted PR url, or empty>
+#   PR_URL=<value of the idea's :ADOPT: property, or empty>
+#   COMPANION_TASK=<value of the idea's :COMPANION_TASK: property, or empty>
 #   SKIP_REVIEW=<project's :SKIP_REVIEW: property, or empty>
 #
 # SKIP_REVIEW carries the project heading's optional :SKIP_REVIEW:
 # property (`t` when the repo opts out of peer review). /promote
 # forwards it to cloude-promote-setup so it lands in the task file.
+# COMPANION_TASK carries the idea's optional :COMPANION_TASK: property
+# (sibling cloude task ID, slug-dated form); /promote forwards it the
+# same way.
 #
 # Exit 0 on success (including empty staging); exit 2 on a usage
 # error, an out-of-range --select index, or a file that can't be
@@ -87,6 +93,7 @@ def _collect(root):
         skip_review = (props.get("SKIP_REVIEW") or "").strip()
         for idea in project.children:
             n += 1
+            idea_props = dict(idea.properties) if idea.properties else {}
             records.append(
                 {
                     "index": n,
@@ -94,6 +101,8 @@ def _collect(root):
                     "repo": repo,
                     "skip_review": skip_review,
                     "title": str(idea.heading).strip(),
+                    "adopt_pr": (idea_props.get("ADOPT") or "").strip(),
+                    "companion_task": (idea_props.get("COMPANION_TASK") or "").strip(),
                 }
             )
     return records, todo_projects
@@ -156,18 +165,19 @@ def main(argv: list[str]) -> int:
                 f"(1..{len(records)})\n"
             )
             return 2
-        title = match["title"]
-        is_adopt = title.startswith("ADOPT ")
+        adopt_pr = match["adopt_pr"]
+        is_adopt = bool(adopt_pr)
         _emit("REPO", match["repo"])
-        _emit("HEADING", title)
+        _emit("HEADING", match["title"])
         _emit("MODE", "adopt" if is_adopt else "standard")
-        _emit("PR_URL", title[len("ADOPT ") :].strip() if is_adopt else "")
+        _emit("PR_URL", adopt_pr)
+        _emit("COMPANION_TASK", match["companion_task"])
         _emit("SKIP_REVIEW", match["skip_review"])
         return 0
 
     print("PROMOTABLE")
     for r in records:
-        suffix = "  [ADOPT]" if r["title"].startswith("ADOPT ") else ""
+        suffix = "  [ADOPT]" if r["adopt_pr"] else ""
         print(f"{r['index']}) [{r['project']}] {r['title']}{suffix}")
     print(f"TODO_PROJECTS {todo_projects}")
     return 0
