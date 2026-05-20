@@ -120,6 +120,26 @@ if [[ -n "${GH_TOKEN:-}" ]]; then
     GH_TOKEN_ENV=(-e "GH_TOKEN=$GH_TOKEN")
 fi
 
+# Forward the host's IANA timezone so in-container timestamps (the
+# task file's `** Log` entries, `date`, etc.) match what host-side
+# /promote / /finalize stamp. The base image defaults to UTC, which
+# would otherwise mix two clocks in the same org file. Prefer an
+# explicit $TZ on the host; otherwise resolve /etc/localtime's
+# symlink target and strip the zoneinfo prefix (works on Linux's
+# /usr/share/zoneinfo/... and macOS's /var/db/timezone/zoneinfo/...).
+# Skipped silently when neither source yields a name — the container
+# then stays on UTC.
+TZ_ENV=()
+if [[ -n "${TZ:-}" ]]; then
+    TZ_ENV=(-e "TZ=$TZ")
+elif [[ -L /etc/localtime ]]; then
+    _tz_target="$(readlink -f /etc/localtime)"
+    _tz_name="${_tz_target##*/zoneinfo/}"
+    if [[ -n "$_tz_name" && "$_tz_name" != "$_tz_target" ]]; then
+        TZ_ENV=(-e "TZ=$_tz_name")
+    fi
+fi
+
 # tasks/active/ is mounted rw at the DIRECTORY level (not the specific
 # file). Reason: Docker single-file bind mounts pin to the source
 # inode, so any host-side edit that writes via atomic-rename (e.g.,
@@ -149,6 +169,7 @@ exec docker run --rm -it --privileged --platform linux/amd64 \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
     "${DOCKER_CFG_MOUNT[@]}" \
     "${GH_TOKEN_ENV[@]}" \
+    "${TZ_ENV[@]}" \
     -e "CLOUDE_TASK_FILE=$TASK_FILE" \
     -e "CLOUDE_ROOT=$CLOUDE" \
     -e "DOCKER_HOST=unix:///var/run/docker.sock" \
