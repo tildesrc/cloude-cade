@@ -120,7 +120,7 @@ On failure, the script's stderr includes a "Succeeded so far" list so the user c
 
 ## 5. Companion-task detection (optional, post-render)
 
-If the chosen idea's heading text clearly names a sibling cloude task this task is paired with — patterns like `"acme-webapp changes for 2026-05-15-acme-service-cluster-by-index"` or `"Rails side for task 2026-05-15-compute-foo"` — add a `:COMPANION_TASK:` property to the new task file's properties drawer with the referenced task ID (the slug-dated `YYYY-MM-DD-<slug>` form), and add a one-line note in the Notes section. Confirm the referenced ID resolves to an existing task file under `tasks/{active,completed,dropped}/<id>.org` before setting the property — skip silently if it doesn't. This is judgment-call pattern matching; don't try to be clever, the user can add the property by hand later. See `docs/internals.md` for the property's documented meaning.
+If the chosen idea's heading text clearly names a sibling cloude task this task is paired with — patterns like `"acme-webapp changes for 2026-05-15-acme-service-new-endpoint"` or `"Frontend for task 2026-05-15-backend-thing"` — add a `:COMPANION_TASK:` property to the new task file's properties drawer with the referenced task ID (the slug-dated `YYYY-MM-DD-<slug>` form), and add a one-line note in the Notes section. Confirm the referenced ID resolves to an existing task file under `tasks/{active,completed,dropped}/<id>.org` before setting the property — skip silently if it doesn't. This is judgment-call pattern matching; don't try to be clever, the user can add the property by hand later. See `docs/internals.md` for the property's documented meaning.
 
 ## 6. Report
 

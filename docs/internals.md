@@ -28,7 +28,7 @@ progresses; humans rarely hand-edit them.
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
 | `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION_TASK:` | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-rails-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
+| `:COMPANION_TASK:` | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
