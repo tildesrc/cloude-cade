@@ -18,7 +18,7 @@ The mode determines which flags are passed to `cloude-promote-setup`.
 `/promote` reads two optional properties from each staging idea sub-heading's properties drawer (in addition to the project-level `:REPO:` and `:SKIP_REVIEW:`):
 
 - `:ADOPT: <pr-url>` — triggers ADOPT mode. The value is the URL of an existing open PR in the project's repo. Without this property, the idea promotes as a standard task.
-- `:COMPANION_TASK: <task-id>` — sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's properties drawer. See `docs/internals.md` for the property's meaning on the active task.
+- `:COMPANION: <task-id>` — sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's properties drawer. See `docs/internals.md` for the property's meaning on the active task.
 
 Both are optional; absent properties take the defaults (standard mode, no companion).
 
@@ -54,7 +54,7 @@ bin/cloude-list-staging --select <N>
 - `HEADING` — the idea's heading text — verbatim, free-form, used in both modes (→ `--staging-heading` and `--heading`).
 - `MODE` — `standard` or `adopt`, derived from the idea's `:ADOPT:` property (see step 2).
 - `PR_URL` — the value of the idea's `:ADOPT:` property in ADOPT mode, empty otherwise.
-- `COMPANION_TASK` — the value of the idea's optional `:COMPANION_TASK:` property (sibling cloude task ID), empty if absent. See step 4.
+- `COMPANION` — the value of the idea's optional `:COMPANION:` property (sibling cloude task ID), empty if absent. See step 4.
 - `SKIP_REVIEW` — the project's optional `:SKIP_REVIEW:` property (`t` when the repo opts out of peer review, empty otherwise; see step 4).
 
 If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
@@ -113,7 +113,7 @@ Plus mode-specific flags:
 Plus, in either mode:
 
 - If `SKIP_REVIEW` from step 1 is `t`, add `--skip-review`. That renders `:SKIP_REVIEW: t` into the new task file's properties drawer, so the repo's peer-review opt-out travels with the task the same way `:REPO:` does — and `/advance` will later skip the `REVIEW` stage (`ITERATING → MERGING`).
-- If `COMPANION_TASK` from step 1 is non-empty, add `--companion-task <id>`. That renders `:COMPANION_TASK: <id>` into the new task file's properties drawer, so the sibling-task pointer travels with the task. See `docs/internals.md` for the property's documented meaning.
+- If `COMPANION` from step 1 is non-empty, add `--companion <id>`. That renders `:COMPANION: <id>` into the new task file's properties drawer, so the sibling-task pointer travels with the task. See `docs/internals.md` for the property's documented meaning.
 
 The script ensures the source clone exists, creates the worktree + branch, opens the draft PR (standard only), renders the task file from `tasks/TEMPLATE.org`, removes the idea from `tasks/staging.org`, and starts the detached tmux session.
 
