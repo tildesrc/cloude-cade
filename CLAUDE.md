@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-This repo holds the user's personal tools for parallelizing and managing
+This repo holds tools for parallelizing and managing
 development with Claude Code. See `README.md` for the current description
 of the repo and the task workflow. The agent-facing wiring reference —
 helper bin/ scripts, in-container hooks, container internals, the active
