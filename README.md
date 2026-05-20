@@ -4,8 +4,8 @@ Go from solo mode to YOLO mode.
 
 ## What this is for
 
-This repo is a workspace for scripts, configs, and utilities that support
-agent-driven development end-to-end — from picking up a task to landing it.
+This repo is a system for parallelizing and managing agent-driven
+development end-to-end — from picking up a task to landing it.
 
 Beyond the mechanical overhead of running Claude Code (worktrees, branches,
 PR triage, scheduled jobs, etc.), the larger goal is to manage the
