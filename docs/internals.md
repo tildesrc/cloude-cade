@@ -28,13 +28,13 @@ progresses; humans rarely hand-edit them.
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
 | `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION_PR:` | *(optional)* URL of a related PR this task pairs with — e.g., an acme-webapp companion to an acme-service PR. Used when work spans two PRs that should land together. |
+| `:COMPANION_TASK:` | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-rails-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
 the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
 whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
-`:COMPANION_PR:` are set by `/promote` when the situation applies
+`:COMPANION_TASK:` are set by `/promote` when the situation applies
 (`:SKIP_REVIEW:` whenever the staging project carries it); they're
 omitted on ordinary tasks.
 
@@ -178,7 +178,7 @@ dependency, and runs on plain `python3`.
 - **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
   lines for the heading TODO/tag/text, the properties drawer
   (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `SKIP_REVIEW` / `COMPANION_PR` when present), and derived fields (`SLUG`,
+  `SKIP_REVIEW` / `COMPANION_TASK` when present), and derived fields (`SLUG`,
   `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
   `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`

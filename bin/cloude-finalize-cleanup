@@ -103,7 +103,7 @@ info_out="$("$TASK_INFO" "$TASK_FILE")" || {
 eval "$info_out"
 
 # $TODO $TAG $HEADING $WORKTREE $BRANCH $PR $REPO $ID
-# $ADOPTED $COMPANION_PR
+# $ADOPTED $COMPANION_TASK
 # $SLUG $REPO_NAME $SOURCE_CLONE $TMUX_SESSION $DIND_VOLUME $CLOUDE_ROOT
 
 # --- Step 2: decide action from $TODO --------------------------------------
