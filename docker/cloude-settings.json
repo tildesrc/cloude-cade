@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLOUDE_ROOT/bin/cloude-on-user-question pre"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "ExitPlanMode",
@@ -7,6 +18,15 @@
           {
             "type": "command",
             "command": "$CLOUDE_ROOT/bin/cloude-on-plan-accepted"
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLOUDE_ROOT/bin/cloude-on-user-question post"
           }
         ]
       }
