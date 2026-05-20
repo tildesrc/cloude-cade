@@ -217,9 +217,14 @@ are waiting on something neither of you controls.
 The `:agent:` / `:user:` flips happen automatically: the in-container
 hooks (`bin/cloude-on-user-prompt` and `bin/cloude-on-stop`) set
 `:agent:` when a turn starts and `:user:` when a PLANNING / ITERATING
-turn ends. You only need to set `:blocked:` deliberately — and you
-*can* set it during a turn to keep the ball off the user at end of
-turn (e.g., when you've spawned external CI you want to wait on).
+turn ends. The end-of-turn flip is suppressed while the agent is still
+waiting on background work it kicked off (any Bash launched with
+`run_in_background: true` whose completion `task-notification` hasn't
+arrived yet, or an active `/babysit-ci` / `/babysit-merge` loop), so
+the tag stays `:agent:` until the background work settles. You only
+need to set `:blocked:` deliberately — and you *can* set it during a
+turn to keep the ball off the user at end of turn (e.g., when you've
+spawned external CI you want to wait on).
 
 ### Running inside the container
 

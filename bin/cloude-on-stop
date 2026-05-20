@@ -21,16 +21,31 @@ the split between them is the whole point of this hook:
    drops no marker, so it gets no block and no reminder text crowding
    out the agent's actual answer.
 
-If an autonomous babysit loop (`/babysit-ci` or `/babysit-merge`) is
-running — detected by its state file in the worktree — this hook does
-nothing at all: that loop owns the heading for its whole duration.
+If the agent ends a turn while still waiting on background work, this
+hook is a full no-op — no tag flip, no DoD reminder, and the DoD
+marker (if armed) is preserved for the next turn so the reminder
+eventually fires once the background work settles. Two signals each
+suffice to keep the hook silent:
+
+- A `/babysit-ci` or `/babysit-merge` state file in the worktree (the
+  skills' own positive marker — they also use these files for their
+  own persistent state, so they stay).
+- An in-flight background Bash detected by scanning the transcript:
+  any assistant `tool_use` for Bash with `run_in_background: true`
+  whose completion `task-notification` (delivered as a
+  `queue-operation` enqueue) hasn't arrived yet.
+
+This generalizes the babysit carve-out to every background Bash the
+agent kicks off, so the dashboard accurately shows `:agent:` while
+the agent is genuinely waiting on work it owns.
 
 The single-block-per-stop guarantee comes from honoring the harness's
 `stop_hook_active` flag: when set, the DoD reminder is skipped, so the
 model cannot get stuck in a block loop.
 
 Everything else is a silent no-op (no task file, unparseable heading,
-a terminal COMPLETE / DROPPED stage, an active babysit loop).
+a terminal COMPLETE / DROPPED stage, a babysit loop active, or an
+in-flight background Bash).
 
 Why this exists: `bin/cloude-dash` color-codes every active task by
 `:agent:` / `:user:` / `:blocked:`. A stale `:agent:` silently lies to
@@ -46,6 +61,7 @@ The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -116,9 +132,12 @@ def main() -> int:
     if state not in IN_FLIGHT:
         return 0  # terminal stage — nothing to maintain
 
-    # An autonomous babysit loop owns the heading while it runs; don't
-    # flip the tag or block the stop out from under it.
-    if babysit_loop_active(hook_input.get("cwd")):
+    # An autonomous babysit loop or an in-flight background Bash means
+    # the agent is still actively waiting on work it owns. Stay silent:
+    # don't flip the tag, don't consume the DoD marker (so a transition
+    # turn that ended with background work pending still gets its DoD
+    # reminder once the background work finally settles).
+    if should_stay_silent(hook_input):
         return 0
 
     # The marker pertains only to the turn that just ended; consume it
@@ -148,6 +167,26 @@ def main() -> int:
     return 0
 
 
+def should_stay_silent(hook_input: dict) -> bool:
+    """True when the hook must be a full no-op for this Stop.
+
+    Two independent signals — either one is sufficient:
+      1. A `/babysit-ci` or `/babysit-merge` state file in `cwd`. The
+         skills keep these as their own positive markers (and use them
+         for their own persistent state — `watch_bash_id`, retry
+         counts, etc.). Their presence means an autonomous loop owns
+         the heading for the duration of the loop.
+      2. The transcript records at least one Bash `run_in_background`
+         start without a matching completion `task-notification`. This
+         generalizes the carve-out: any background Bash the agent kicks
+         off keeps the heading at `:agent:` while it's still running.
+    """
+    return (
+        babysit_loop_active(hook_input.get("cwd"))
+        or background_bash_pending(hook_input.get("transcript_path"))
+    )
+
+
 def babysit_loop_active(cwd: str | None) -> bool:
     """True when a `/babysit-ci` or `/babysit-merge` loop is running.
 
@@ -160,6 +199,81 @@ def babysit_loop_active(cwd: str | None) -> bool:
     if not cwd:
         return False
     return any((Path(cwd) / name).is_file() for name in BABYSIT_STATE_FILES)
+
+
+# Compiled once at import time — both regexes apply to every queue-operation
+# enqueue entry whose content carries a `<task-notification>` block.
+_TASK_TUID_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
+_TASK_STATUS_RE = re.compile(r"<status>([^<]+)</status>")
+
+# Terminal statuses for a background task — `running` would mean the
+# notification is just an interim update (the harness emits those for
+# certain tool types, though Bash uses the terminal ones).
+_TERMINAL_STATUSES = frozenset(("completed", "killed", "failed"))
+
+
+def background_bash_pending(transcript_path: str | None) -> bool:
+    """True when the transcript records a background Bash whose
+    completion notification hasn't arrived yet.
+
+    The Stop hook input from Claude Code includes `transcript_path` (a
+    JSONL file). Two kinds of entries get scanned, by tool_use_id:
+
+      - assistant tool_use blocks with `name == "Bash"` and
+        `input.run_in_background == true` — these are *starts*.
+      - `queue-operation` enqueue entries whose content carries a
+        `<task-notification>` block matching one of the started
+        tool_use_ids with a terminal `<status>` — these are *finishes*.
+
+    Pending = (starts) − (finishes). A missing or unreadable transcript
+    is treated as "no pending tasks" — better to err on the side of
+    flipping the tag (today's behavior) than to wedge `:agent:` on a
+    bad path.
+    """
+    if not transcript_path:
+        return False
+    path = Path(transcript_path)
+    if not path.is_file():
+        return False
+    started: set[str] = set()
+    completed: set[str] = set()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                msg = entry.get("message") or {}
+                if msg.get("role") == "assistant":
+                    for block in msg.get("content") or []:
+                        if not isinstance(block, dict):
+                            continue
+                        if (
+                            block.get("type") == "tool_use"
+                            and block.get("name") == "Bash"
+                            and (block.get("input") or {}).get("run_in_background")
+                        ):
+                            tuid = block.get("id")
+                            if tuid:
+                                started.add(tuid)
+                if (
+                    entry.get("type") == "queue-operation"
+                    and entry.get("operation") == "enqueue"
+                ):
+                    content = entry.get("content")
+                    if isinstance(content, str) and "<task-notification>" in content:
+                        m_tuid = _TASK_TUID_RE.search(content)
+                        m_status = _TASK_STATUS_RE.search(content)
+                        if (
+                            m_tuid
+                            and m_status
+                            and m_status.group(1) in _TERMINAL_STATUSES
+                        ):
+                            completed.add(m_tuid.group(1))
+    except OSError:
+        return False
+    return bool(started - completed)
 
 
 def flip_to_user(task: str) -> None:
