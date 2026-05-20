@@ -1,9 +1,10 @@
 """Shared helpers for the cloude hook scripts and cloude-task-set-state.
 
-`bin/cloude-on-stop` and `bin/cloude-on-user-prompt` both need to read
-the first heading of a task `.org` file — its TODO keyword and its
-who-has-the-ball tag — to decide whether to act. This module is the one
-place that read-only parsing lives, so the two hooks cannot drift apart.
+`bin/cloude-on-stop`, `bin/cloude-on-user-prompt`, and
+`bin/cloude-on-user-question` all need to read the first heading of a
+task `.org` file — its TODO keyword and its who-has-the-ball tag — to
+decide whether to act. This module is the one place that read-only
+parsing lives, so those hooks cannot drift apart.
 
 It also owns `dod_marker_path` — the location of the per-task
 "a stage transition happened this turn" marker file. Four scripts
