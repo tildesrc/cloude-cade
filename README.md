@@ -320,6 +320,40 @@ require review — that's the default.
 ** Add a task-promotion script
 ```
 
+**Idea-level properties.** Each idea sub-heading may itself carry an
+optional properties drawer with `:ADOPT:` and/or `:COMPANION_TASK:`:
+
+- `:ADOPT: <PR url>` — promote this idea as an **ADOPT-mode** task:
+  no new branch or PR is created; the existing PR's branch is checked
+  out as a worktree and the task starts in `ITERATING :user:`. The
+  heading text and body are free-form (used as the iteration prompt
+  pre-fill, same as standard mode).
+- `:COMPANION_TASK: <task-id>` — this task is paired with a sibling
+  cloude task (slug-dated ID, e.g. `2026-05-15-acme-service-new-endpoint`).
+  The property is copied verbatim into the new active task file's
+  properties drawer; see [`docs/internals.md`](docs/internals.md) for
+  what it means downstream.
+
+Both are optional; `/promote` reads them from the staging idea and
+forwards them via flags to the orchestrator. Heading text is never
+pattern-matched to infer either — they're properties or nothing.
+
+```org
+* cloude-cade
+  :PROPERTIES:
+  :REPO: https://github.com/<org>/cloude-cade
+  :SKIP_REVIEW: t
+  :END:
+** Take over the WIP refactor from someone else's branch
+   :PROPERTIES:
+   :ADOPT: https://github.com/<org>/cloude-cade/pull/42
+   :END:
+** Wire the new endpoint into the dashboard
+   :PROPERTIES:
+   :COMPANION_TASK: 2026-05-15-acme-service-new-endpoint
+   :END:
+```
+
 A top-level heading **without** `:REPO:` is treated as a **TODO
 project** — its sub-headings are personal TODOs the user works on
 themselves, not promotable agent-driven tasks. On the dashboard each
@@ -449,10 +483,13 @@ you invoke by hand:
   `worktrees/<repo-name>/<slug>`, a draft PR, and a detached
   `cloude-<slug>` tmux session — starts in `PLANNING :user:`, with
   the container's Claude Code input box pre-filled with the staging
-  entry as the planning prompt. If the staging idea is `ADOPT <PR
-  url>`, switches to **ADOPT mode**: no new branch or PR, checks out
-  the existing PR's branch and starts in `ITERATING :user:` so you
-  can direct the agent on what to do with the adopted work.
+  entry as the planning prompt. If the staging idea carries an
+  `:ADOPT: <PR url>` property (see [staging.org
+  structure](#stagingorg-structure)), switches to **ADOPT mode**: no
+  new branch or PR, checks out the existing PR's branch and starts
+  in `ITERATING :user:` with the staging entry pre-filled as the
+  iteration prompt so you can direct the agent on what to do with
+  the adopted work.
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,

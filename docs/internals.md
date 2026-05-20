@@ -28,15 +28,33 @@ progresses; humans rarely hand-edit them.
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
 | `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION_PR:` | *(optional)* URL of a related PR this task pairs with — e.g., an acme-webapp companion to an acme-service PR. Used when work spans two PRs that should land together. |
+| `:COMPANION_TASK:` | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
 the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
 whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
-`:COMPANION_PR:` are set by `/promote` when the situation applies
-(`:SKIP_REVIEW:` whenever the staging project carries it); they're
-omitted on ordinary tasks.
+`:COMPANION_TASK:` are set by `/promote` when the situation applies
+(see *Staging-idea trigger properties* below for what each one keys
+off of); they're omitted on ordinary tasks.
+
+## Staging-idea trigger properties
+
+`/promote` reads two optional properties from each staging idea
+sub-heading's properties drawer (in addition to the project-level
+`:REPO:` and `:SKIP_REVIEW:`):
+
+| Property            | Meaning                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `:ADOPT:`           | *(optional)* URL of an existing open PR in the project's repo. Triggers ADOPT mode (`/promote` checks out the PR's branch as a worktree rather than opening a new draft PR). Without this property, the idea promotes as a standard task. Renders `:ADOPTED: t` into the new active task's properties drawer. |
+| `:COMPANION_TASK:`  | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION_TASK:` property. |
+
+Both are detected by `bin/cloude-list-staging` (which emits `MODE` /
+`PR_URL` / `COMPANION_TASK` lines for the chosen idea) and forwarded by
+`/promote` to `bin/cloude-promote-setup` via the matching `--mode` /
+`--pr-url` / `--companion-task` flags. The staging idea's heading text
+and body are free-form in both modes — mode and pairing are determined
+entirely by property presence, never by heading-text pattern matching.
 
 ## Per-stage log entry: schema and hook check
 
@@ -162,12 +180,18 @@ dependency, and runs on plain `python3`.
 - **`cloude-list-staging`** — Print promotable ideas from
   `tasks/staging.org` numbered globally, plus a trailing
   `TODO_PROJECTS <n>` count of personal-TODO projects (no `:REPO:`)
-  that `/promote` skips. With `--select N`, instead emits the chosen
+  that `/promote` skips. The `[ADOPT]` suffix on a listing line is
+  derived from the idea's own `:ADOPT:` property (see *Staging-idea
+  trigger properties*); idea heading text is free-form and never
+  pattern-matched. With `--select N`, instead emits the chosen
   idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
-  `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines, so `/promote` can
-  `eval` it rather than re-parsing staging.org. (`SKIP_REVIEW` carries
-  the project heading's optional `:SKIP_REVIEW:` property.) Used by
-  `/promote` step 1.
+  `COMPANION_TASK`, `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines,
+  so `/promote` can `eval` it rather than re-parsing staging.org.
+  `MODE` is `adopt` iff the idea has `:ADOPT:` set; `PR_URL` carries
+  the `:ADOPT:` value in that case. `COMPANION_TASK` carries the
+  idea's `:COMPANION_TASK:` property (empty if absent). `SKIP_REVIEW`
+  carries the project heading's optional `:SKIP_REVIEW:` property.
+  Used by `/promote` step 1.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -178,7 +202,7 @@ dependency, and runs on plain `python3`.
 - **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
   lines for the heading TODO/tag/text, the properties drawer
   (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `SKIP_REVIEW` / `COMPANION_PR` when present), and derived fields (`SLUG`,
+  `SKIP_REVIEW` / `COMPANION_TASK` when present), and derived fields (`SLUG`,
   `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
   `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
@@ -213,21 +237,26 @@ dependency, and runs on plain `python3`.
   steps 4-9: ensure source clone, create worktree + branch, push
   (standard) or fetch (ADOPT), open draft PR (standard only),
   render task file from `tasks/TEMPLATE.org`, remove staging entry,
-  start tmux session, and — in standard mode — queue the staging
-  entry to pre-fill the container's input box via
-  `cloude-prefill-prompt`. The tmux session is created with two
-  windows: window 0 (`agent`, selected by default) runs
-  `bin/cloude-run`; window 1 (`task`) runs
-  `bin/cloude-open-task-file` as a read-only live view of the
-  task's `.org` file. Distinct non-zero exit codes per failure
-  mode (10 clone, 11 worktree, 12 PR, 13 render, 14 staging removal,
-  20 tmux collision, 30 arg validation) and a "Succeeded so far"
-  trail on stderr.
+  start tmux session, and queue the staging entry (heading + body,
+  with any properties drawer stripped) to pre-fill the container's
+  input box via `cloude-prefill-prompt` — both modes get the
+  prefill, since the staging idea is the user's free-form direction
+  in either case. The tmux session is created with two windows:
+  window 0 (`agent`, selected by default) runs `bin/cloude-run`;
+  window 1 (`task`) runs `bin/cloude-open-task-file` as a read-only
+  live view of the task's `.org` file. Optional flags
+  `--skip-review` and `--companion-task <id>` render
+  `:SKIP_REVIEW: t` and `:COMPANION_TASK: <id>` respectively into
+  the new task file's properties drawer. Distinct non-zero exit
+  codes per failure mode (10 clone, 11 worktree, 12 PR, 13 render,
+  14 staging removal, 20 tmux collision, 30 arg validation) and a
+  "Succeeded so far" trail on stderr.
 - **`cloude-prefill-prompt <tmux-session> <prompt-file>`** —
   Best-effort background poller that pre-fills a freshly promoted
   task's Claude Code input box. Launched detached by
-  `cloude-promote-setup` (standard mode only): it watches the task's
-  tmux pane until Claude Code's interactive input box is ready, then
+  `cloude-promote-setup` (both standard and ADOPT modes): it watches
+  the task's tmux pane until Claude Code's interactive input box is
+  ready, then
   *pastes* the prompt in — a bracketed paste, so a multi-line staging
   entry lands as unsent input rather than submitting on the first
   newline. Readiness is detected from the bracketed-paste-enable
