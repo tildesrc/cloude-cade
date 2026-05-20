@@ -563,9 +563,17 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   per-task marker file (in `/tmp`); `cloude-task-set-state` arms it on
   every `--todo` change into an in-flight stage, and this hook
   consumes it. `stop_hook_active` bounds the block to once per stop
-  cycle. If a `/babysit-ci` or `/babysit-merge` loop is running
-  (detected by its `.cloude-babysit-*-state.json` in the worktree),
-  the whole hook is a no-op — the autonomous loop owns the heading.
+  cycle. *Background-work carve-out:* the hook is a full no-op (no tag
+  flip, no DoD reminder, the marker stays armed for next turn)
+  whenever the agent is still waiting on background work it kicked
+  off. Two signals each suffice: a `/babysit-ci` or `/babysit-merge`
+  state file in the worktree (`.cloude-babysit-*-state.json`), and an
+  in-flight background Bash detected by scanning the transcript JSONL
+  for a `run_in_background: true` start without a matching completion
+  `task-notification`. The transcript scan generalizes the babysit
+  carve-out to every background Bash the agent launches, so the
+  dashboard accurately shows `:agent:` while the agent is genuinely
+  waiting on its own work.
 - **`PreToolUse:AskUserQuestion` / `PostToolUse:AskUserQuestion` →
   `bin/cloude-on-user-question pre` / `… post`.** Manages the tag
   around an `AskUserQuestion` wait window — neither `Stop` nor
@@ -574,11 +582,14 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   than a fresh prompt), so without this hook the tag stays `:agent:`
   while the user is being asked something. `pre` flips `:agent:` →
   `:user:` just before the question is shown; `post` flips `:user:` →
-  `:agent:` once the answer arrives. Only acts on in-flight stages,
-  leaves `:blocked:` alone, and ignores babysit loop state (the round
-  trip restores `:agent:` so the loop's tag invariant is preserved).
-  Never blocks the tool call — exits 0 on every path, including a
-  tag-flip helper failure.
+  `:agent:` once the answer arrives. Only acts on in-flight stages
+  and leaves `:blocked:` alone. Unlike `cloude-on-stop`, this hook
+  has no background-work carve-out: an `AskUserQuestion` round trip
+  is genuinely transient (the user really does have the ball while
+  the question is open), and `post` restores `:agent:` afterward, so
+  the carve-out's tag invariant is preserved automatically. Never
+  blocks the tool call — exits 0 on every path, including a tag-flip
+  helper failure.
 
 `cloude-on-user-prompt`, `cloude-on-stop`, `cloude-on-plan-accepted`,
 `cloude-on-user-question`, and `cloude-task-set-state` all share
