@@ -38,6 +38,112 @@ whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
 (`:SKIP_REVIEW:` whenever the staging project carries it); they're
 omitted on ordinary tasks.
 
+## Per-stage log entry: schema and hook check
+
+Each task file has a `** Log` top-level section that is the per-stage
+audit trail. Every stage transition / `/iterate` appends one entry
+under it, and the stop hook reads the latest entry's DoD verdict to
+decide whether to block.
+
+### Two `#+TODO:` sequences
+
+Each task file declares two file-level TODO sequences (the second is
+added by `tasks/TEMPLATE.org` for new tasks; existing in-flight files
+need it added by hand as part of migration):
+
+```
+#+TODO: PLANNING(p!) ITERATING(i!) REVIEW(r!) MERGING(m!) | COMPLETE(c!) DROPPED(x@)
+#+TODO: PENDING(P!) UNSATISFIABLE(U!) | PASS(D!)
+```
+
+The first sequence is the *stage* keyword carried on the level-1
+heading. The second is the *verdict* keyword carried on each log
+entry's `**** DoD` sub-sub-heading. Org doesn't scope sequences to
+heading levels — discipline keeps stage keywords on level 1 and
+verdict keywords on level 4 `DoD` headings only. The parsers care
+about structural position (level + parent), so a cross-applied
+keyword is silently ignored rather than mis-classified.
+
+### Entry shape
+
+```
+*** [2026-05-20 Wed 11:30] ITERATING (via /advance from PLANNING)
+    :PROPERTIES:
+    :STAGE:       ITERATING
+    :ENTERED:     [2026-05-20 Wed 11:30]
+    :ENTERED_VIA: /advance from PLANNING
+    :EXITED:      [2026-05-20 Wed 14:00]   (only on past entries)
+    :DURATION:    2h 30m                    (only on past entries)
+    :END:
+**** Request
+     What the user asked.
+**** Work
+     What was done (updated over the stage's lifetime).
+**** [5/6] UNSATISFIABLE DoD
+     CLOSED: [2026-05-20 Wed 14:00]        (auto-written on PASS only)
+     :LOGBOOK:
+     - State "UNSATISFIABLE" from "PENDING" [2026-05-20 Wed 13:50]
+     - State "PENDING"       from ""        [2026-05-20 Wed 11:30]
+     :END:
+     - [X] one
+     - [X] two
+     ... (more checkboxes; `- [ ]/[X]/[-]`) ...
+     - [ ] one that isn't met yet
+
+     Optional explanation prose (required when verdict is
+     UNSATISFIABLE).
+```
+
+The level-3 heading text is prefixed with `[<timestamp>]` so org
+doesn't mistake the stage word for a TODO state. The stage is read
+from the `:STAGE:` property (the canonical source); the heading text
+is informational.
+
+### Parser & helpers
+
+All schema-aware code lives in `bin/cloude_org.py` (stdlib-only —
+hook scripts run on bare `python3`):
+
+- `iter_log_entries(text)` / `latest_log_entry(text)` — yield one
+  dict per entry with `stage`, `entered`, `entered_via`, `exited`,
+  `duration`, `request`, `work`, `dod_verdict`, `dod_cookie`,
+  `dod_checkboxes` (list of `'open'` / `'ticked'` / `'na'` per
+  bullet), `dod_body`, and `span` / `dod_span` char-offset pairs for
+  surgical rewrites.
+- `append_log_entry_skeleton(text, stage=..., via=..., prev_stage=...,
+  when=...)` — appends a fresh entry skeleton with one `- [ ]` per
+  `STAGE_DOD[stage]` bullet under `**** [0/N] PENDING DoD`, and
+  stamps `:EXITED:` + `:DURATION:` on the previous entry.
+- `set_dod_verdict(text, new_verdict=..., when=..., body=None)` —
+  flips the latest entry's DoD heading's TODO keyword, prepends a
+  state-change line to its `:LOGBOOK:` drawer, writes the `CLOSED:`
+  timestamp on PASS, and validates the verdict/cookie consistency
+  rule. Raises `DodConsistencyError` on inconsistency
+  (`PASS` ⇒ all ticked/N/A; `UNSATISFIABLE` ⇒ ≥1 open;
+  `PENDING` ⇒ no constraint).
+- `STAGE_DOD: dict[str, tuple[str, ...]]` — per-stage DoD bullets,
+  consumed by the skeleton generator and the hook. CLAUDE.md's
+  *Stage details* sections mirror these as the human-facing copy.
+
+### Lifecycle
+
+- `cloude-promote-setup` seeds the initial entry (`/promote`,
+  PLANNING for standard mode or ITERATING for ADOPT mode).
+- `cloude-task-set-state --todo <STAGE>` (called by `/advance`,
+  `/iterate`, `/drop`) flips the level-1 keyword *and* appends a
+  fresh entry skeleton via `append_log_entry_skeleton`, inferring
+  `:ENTERED_VIA:` from the transition direction
+  (`/advance` for forward, `/iterate` for backward, `/drop` for
+  `→ DROPPED`). Pass `--via TEXT` to override.
+- `cloude-task-set-state --dod-state <verdict> [--reason "..."]`
+  flips the latest entry's DoD verdict via `set_dod_verdict`. Refuses
+  inconsistent transitions (exit code `31`).
+- `cloude-on-stop` consumes the per-task DoD marker on a transition /
+  `/iterate` turn and runs the verdict check. The hook blocks once
+  on any of: `PENDING` verdict, verdict/cookie mismatch, missing
+  `** Log` section, empty log section, or stage mismatch between
+  level-1 and latest entry's `:STAGE:`.
+
 ## Helper scripts in `bin/`
 
 `/promote`, `/sweep`, `/finalize`, and the in-container state-flip
@@ -78,16 +184,31 @@ dependency, and runs on plain `python3`.
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
   skills at their read-the-task-file step. Exit 3 names the missing
   key when a required property is absent.
-- **`cloude-task-set-state <task-file> [--todo NAME] [--tag NAME]`** —
-  Rewrite the first heading of a task file in place: `--todo` swaps
-  the TODO keyword, `--tag` replaces the entire trailing tag chain
-  with one tag; an omitted flag leaves that part untouched. The
-  heading text and everything below are preserved. This is the one
-  place the task-heading edit is spelled out — the `/advance`,
-  `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge` skills and
-  `cloude-finalize-cleanup`'s force-drop all call it instead of
-  re-deriving the rewrite. Prints the resulting `TODO` / `TAG`.
-  Regex-based, no dependency, runs on plain `python3`.
+- **`cloude-task-set-state <task-file> [--todo NAME] [--tag NAME] [--via TEXT]`**
+  / **`cloude-task-set-state <task-file> --dod-state NAME [--reason TEXT]`** —
+  Two modes, sharing one entry point. The first rewrites the
+  level-1 stage heading: `--todo` swaps the stage keyword (and on
+  any TODO change also appends a fresh log-entry skeleton via
+  `cloude_org.append_log_entry_skeleton`, stamping `:EXITED:` +
+  `:DURATION:` on the previous entry); `--tag` replaces the
+  trailing tag chain with one tag; `--via TEXT` overrides the
+  auto-inferred `:ENTERED_VIA:` text on the new skeleton (default:
+  `/advance` for forward, `/iterate` for backward, `/drop` for
+  `→ DROPPED`). The second flips the latest `** Log` entry's DoD
+  verdict via `cloude_org.set_dod_verdict` — enforces the
+  verdict/cookie consistency rule (`PASS` ⇒ all ticked; `UNSATISFIABLE`
+  ⇒ ≥1 open) and exits `31` on violation, prepends a state-change
+  line to the DoD heading's `:LOGBOOK:` drawer, and on `PASS`
+  writes a `CLOSED:` timestamp (mirroring what `org-log-done` would
+  do). `--reason TEXT` (second form only) replaces the prose block
+  below the checkbox lines. The two modes are mutually exclusive.
+  This is the one place the task-heading and DoD-heading edits are
+  spelled out — the `/advance`, `/iterate`, `/drop`, `/babysit-ci`,
+  `/babysit-merge` skills, `cloude-finalize-cleanup`'s force-drop,
+  and the stop hook's deterministic tag flip all call it instead of
+  re-deriving the rewrite. Prints the resulting `TODO` / `TAG` (first
+  form) or `DOD_VERDICT` (second form). Regex-based, no dependency,
+  runs on plain `python3`.
 - **`cloude-promote-setup`** — Bash orchestrator for `/promote`
   steps 4-9: ensure source clone, create worktree + branch, push
   (standard) or fetch (ADOPT), open draft PR (standard only),
@@ -180,20 +301,30 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   `cloude-on-user-prompt`'s `:user:` -> `:agent:` flip. `:blocked:` is
   never touched (a deliberate state); REVIEW and MERGING are skipped
   too (REVIEW defaults to `:blocked:` and MERGING is agent-driven —
-  `/babysit-merge` owns its tag). *DoD reminder:* blocks the stop
-  once and injects the current stage's Definition of Done — **but
-  only** on turns that began with a stage transition or an `/iterate`,
-  not on ordinary conversational turns. Those transition turns drop a
-  per-task marker file (in `/tmp`); `cloude-task-set-state` arms it on
-  every `--todo` change into an in-flight stage, and this hook
-  consumes it. `stop_hook_active` bounds the block to once per stop
-  cycle. *Background-work carve-out:* the hook is a full no-op (no tag
-  flip, no DoD reminder, the marker stays armed for next turn)
-  whenever the agent is still waiting on background work it kicked
-  off. Two signals each suffice: a `/babysit-ci` or `/babysit-merge`
-  state file in the worktree (`.cloude-babysit-*-state.json`), and an
-  in-flight background Bash detected by scanning the transcript JSONL
-  for a `run_in_background: true` start without a matching completion
+  `/babysit-merge` owns its tag). *DoD check:* blocks the stop once
+  with a targeted message when the latest `** Log` entry's verdict is
+  not yet acceptable — **but only** on turns that began with a stage
+  transition or an `/iterate`, not on ordinary conversational turns.
+  Those transition turns drop a per-task marker file (in `/tmp`);
+  `cloude-task-set-state` arms it on every `--todo` change into an
+  in-flight stage, and this hook consumes it. The check is a pure
+  org-parse of the latest log entry (see the
+  [per-stage log entry section](#per-stage-log-entry-schema-and-hook-check)
+  below): the verdict is the TODO keyword on the `**** DoD` heading
+  (drawn from the secondary `#+TODO:` sequence), and the per-bullet
+  checkboxes must agree with it (`PASS` ⇒ every box ticked or N/A;
+  `UNSATISFIABLE` ⇒ at least one open). The hook blocks for
+  `PENDING`, an inconsistent verdict/cookie pair, a missing `** Log`
+  section, or a stage mismatch between the level-1 keyword and the
+  latest entry's `:STAGE:`. `stop_hook_active` bounds the block to
+  once per stop cycle. *Background-work carve-out:* the hook is a
+  full no-op (no tag flip, no DoD check, the marker stays armed for
+  next turn) whenever the agent is still waiting on background work
+  it kicked off. Two signals each suffice: a `/babysit-ci` or
+  `/babysit-merge` state file in the worktree
+  (`.cloude-babysit-*-state.json`), and an in-flight background Bash
+  detected by scanning the transcript JSONL for a
+  `run_in_background: true` start without a matching completion
   `task-notification`. The transcript scan generalizes the babysit
   carve-out to every background Bash the agent launches, so the
   dashboard accurately shows `:agent:` while the agent is genuinely
@@ -217,12 +348,15 @@ who-has-the-ball tag in sync with what the agent is actually doing:
 
 `cloude-on-user-prompt`, `cloude-on-stop`, `cloude-on-plan-accepted`,
 `cloude-on-user-question`, and `cloude-task-set-state` all share
-parsing and the DoD-marker path helper through `bin/cloude_org.py`.
-Unlike the org-reading helper scripts, those scripts deliberately
-*don't* use `orgparse`: Claude Code's hook runner executes them on
-plain stdlib `python3`, not through `uv`, so a third-party import
-would fail — and a one-line heading grammar is well within reach of a
-regex anyway.
+heading parsing, the DoD-marker path helper, the per-stage `STAGE_DOD`
+bullets, and the `** Log` entry helpers (`iter_log_entries`,
+`latest_log_entry`, `append_log_entry_skeleton`, `set_dod_verdict`,
+`find_log_section`) through `bin/cloude_org.py`. Unlike the
+org-reading helper scripts, those scripts deliberately *don't* use
+`orgparse`: Claude Code's hook runner executes them on plain stdlib
+`python3`, not through `uv`, so a third-party import would fail —
+and the small, fixed grammar this touches is well within reach of a
+handful of regexes anyway.
 
 The settings file is baked into the image (Dockerfile `COPY
 docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced

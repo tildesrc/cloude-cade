@@ -375,6 +375,54 @@ then
 fi
 record "Rendered task file $TASK_FILE"
 
+# --- Step 5b: seed the initial log entry ----------------------------------
+# Appends a fresh `*** <STAGE> (via /promote)` entry under `** Log` with
+# pre-seeded DoD checkboxes from `cloude_org.STAGE_DOD`. The stage
+# matches NEW_TODO (PLANNING for standard mode, ITERATING for ADOPT).
+# Best-effort: a seeding failure warns but does not undo the render.
+
+if ! CLOUDE_ROOT="$CLOUDE_ROOT" python3 - <<'PY' "$TASK_FILE" "$NEW_TODO"
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
+from cloude_org import append_log_entry_skeleton, find_log_section, now_ts
+
+task_file = sys.argv[1]
+new_todo = sys.argv[2]
+
+path = Path(task_file)
+content = path.read_text()
+if find_log_section(content) is None:
+    sys.stderr.write(
+        f"cloude-promote-setup: task file has no ** Log section; "
+        f"initial log entry not seeded. Add the section to "
+        f"tasks/TEMPLATE.org to enable this.\n"
+    )
+    sys.exit(0)
+
+try:
+    new_content = append_log_entry_skeleton(
+        content,
+        stage=new_todo,
+        via="/promote",
+        prev_stage="",
+        when=now_ts(),
+    )
+except ValueError as exc:
+    sys.stderr.write(
+        f"cloude-promote-setup: could not seed initial log entry: {exc}\n"
+    )
+    sys.exit(0)
+
+path.write_text(new_content)
+PY
+then
+    : # already warned via stderr; do not fail the promote
+fi
+record "Seeded initial $NEW_TODO log entry"
+
 # --- Step 6: remove the chosen sub-heading from staging.org ----------------
 
 STAGING="$CLOUDE_ROOT/tasks/staging.org"
