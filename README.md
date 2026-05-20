@@ -44,9 +44,17 @@ PR. The sections below it are the full reference.
 ### One-time setup
 
 ```sh
+make sync        # install pinned Python deps into ./.venv-host/ (host helpers)
 make build       # build the container image (a few minutes the first time)
 make login       # interactive claude login — do this once per workstation
 ```
+
+`make sync` runs `uv sync --frozen` against the checked-in
+`pyproject.toml` + `uv.lock` and drops the resulting venv at
+`./.venv-host/`. The host helpers (`bin/cloude-python` and anything
+that re-execs through it) find their interpreter there; the container
+image gets the matching venv at `/opt/cloude-venv/` baked in by
+`make build`, from the same lockfile.
 
 After `make login` exits, your Claude credentials live in the
 `cloude-claude-creds` Docker volume and persist across every task and

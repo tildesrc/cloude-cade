@@ -1,0 +1,9 @@
+[project]
+name = "cloude"
+version = "0.0.0"
+description = "Shared Python dependencies for the cloude bin/ helpers and in-container hooks."
+requires-python = ">=3.11"
+dependencies = [
+    "orgparse>=0.4",
+    "inotify_simple>=1.3; sys_platform == 'linux'",
+]

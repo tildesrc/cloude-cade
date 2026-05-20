@@ -1,0 +1,39 @@
+#!/bin/sh
+# Re-exec into the cloude-managed Python interpreter.
+#
+# Two locations are searched, in order:
+#   1. /opt/cloude-venv/bin/python3       — baked into the Docker image
+#                                           by the Dockerfile.
+#   2. <cloude-root>/.venv-host/bin/python3 — built by `make sync` on
+#                                              the host from the same
+#                                              pyproject.toml + uv.lock.
+#
+# Both venvs are pinned to the repo's checked-in uv.lock, so the host
+# and the in-container helpers see the same package versions. The
+# container venv lives *outside* the cloude repo's read-only bind
+# mount so the host's .venv-host/ can't shadow it.
+#
+# Used by the Python hook scripts (cloude-on-stop, cloude-on-user-prompt,
+# cloude-on-user-question, cloude-on-plan-accepted, cloude-task-set-state)
+# via an sh/Python polyglot shebang, and by bin/cloude-promote-setup's
+# log-entry-seeder heredoc. The polyglot pattern self-locates this
+# launcher via $0, so neither side relies on PATH.
+
+set -eu
+
+if [ -x /opt/cloude-venv/bin/python3 ]; then
+    exec /opt/cloude-venv/bin/python3 "$@"
+fi
+
+HOST_VENV="$(dirname "$(dirname "$(readlink -f "$0")")")/.venv-host"
+if [ -x "$HOST_VENV/bin/python3" ]; then
+    exec "$HOST_VENV/bin/python3" "$@"
+fi
+
+cat >&2 <<EOF
+cloude-python: no managed venv found
+  tried: /opt/cloude-venv/bin/python3   (container — built by 'make build')
+         $HOST_VENV/bin/python3   (host — built by 'make sync')
+  fix:   run 'make sync' on the host, or 'make build' to rebuild the image
+EOF
+exit 1

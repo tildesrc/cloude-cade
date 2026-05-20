@@ -27,27 +27,26 @@ drop the marker on a transition, and `cloude-on-stop` consumes it to
 fire its Definition-of-Done check only once per transition / `/iterate`
 turn rather than on every turn.
 
-Why a hand-rolled regex here, instead of `orgparse`?
+Why hand-rolled regex here, instead of `orgparse`?
 
-The repo's org-*reading* scripts — `cloude-dash`, `cloude-list-*`,
-`cloude-task-info` — do use `orgparse`. They can, because they declare
-it via a PEP 723 inline-deps header and are run through `uv`, which
-resolves that third-party dependency transparently.
+It is no longer a hard constraint. The hook scripts that import this
+module (`cloude-on-stop`, `cloude-on-user-prompt`,
+`cloude-on-user-question`, `cloude-on-plan-accepted`,
+`cloude-task-set-state`) are re-exec'd through `bin/cloude-python`
+via an sh/Python polyglot shebang, so they run under the shared
+cloude venv built from the repo-root `pyproject.toml` + `uv.lock`.
+`import orgparse` works here — adding it is a one-line edit to the
+manifest, no per-invocation `uv run` overhead. See
+`docs/internals.md` → "Why hot-path hooks don't use `uv run`" for
+the full launcher / lockfile story.
 
-The hook scripts are different: Claude Code's hook runner executes them
-directly via their `#!/usr/bin/env python3` shebang — *not* through
-`uv`. There is no dependency resolution step, so they run on plain
-stdlib `python3`, and a third-party `import orgparse` would simply fail.
-Any module a hook imports inherits that same constraint, so this one is
-deliberately stdlib-only (`re`, `datetime`).
-
-That is no real loss: the grammar this touches is tiny and fixed — a
-single heading line, `* <TODO> <text> :tag:chain:`, plus the log
-entry schema described above — which a handful of regexes covers
-comfortably. It is the same trade-off `cloude-task-set-state`
-documents for its own regex-based heading *edit*. `orgparse` would
-parse the entire file (every drawer, the `** Plan` subtree, the
-logbook) just to read a few sections.
+We keep the regex-based implementation for now because the grammar
+it touches is tiny and fixed — a single heading line,
+`* <TODO> <text> :tag:chain:`, plus the log entry schema described
+above — and the log-entry editor in particular needs byte/line
+ranges per node that `orgparse` doesn't expose (it'd have to be
+hand-written either way). Future work can swap individual helpers
+(e.g. `parse_heading`) to `orgparse` without touching the rest.
 """
 
 from __future__ import annotations

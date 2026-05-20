@@ -38,6 +38,20 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
 
+# Shared cloude Python venv at /opt/cloude-venv/, built from the
+# repo-root pyproject.toml + uv.lock. The in-container hook scripts
+# (cloude-on-stop, cloude-on-user-prompt, …) re-exec through
+# bin/cloude-python, which prefers this venv. Living outside the
+# cloude repo's read-only bind mount keeps the host's .venv-host/
+# from shadowing it. `uv sync --frozen --no-install-project` resolves
+# from the lockfile only and skips installing the (virtual) project
+# itself. Only this layer is invalidated when deps change.
+COPY pyproject.toml uv.lock /tmp/uv/
+RUN cd /tmp/uv \
+    && UV_PROJECT_ENVIRONMENT=/opt/cloude-venv \
+       uv sync --frozen --no-install-project \
+    && rm -rf /tmp/uv
+
 # bun (JS/TS runtime + package manager). Installer needs unzip and
 # drops the binary at $BUN_INSTALL/bin/bun; pin to /usr/local so it's
 # on PATH for every user.

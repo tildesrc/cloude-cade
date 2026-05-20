@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""PreToolUse / PostToolUse:AskUserQuestion hook handler.
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+__doc__ = """PreToolUse / PostToolUse:AskUserQuestion hook handler.
 
 Manages the task heading's who-has-the-ball tag around an
 `AskUserQuestion` wait window. Fires twice per question:
@@ -63,10 +68,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The heading parser is shared with bin/cloude-on-stop and
-# bin/cloude-on-user-prompt; all three hooks run on plain stdlib
-# python3, so it lives in a sibling module rather than orgparse (see
-# cloude_org.py for the full rationale).
+# The heading parser is shared with the sibling hook scripts (see
+# cloude_org.py and the polyglot shebang above for the launcher /
+# venv story).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import ball_tag, parse_heading  # noqa: E402
 

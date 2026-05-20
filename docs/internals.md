@@ -119,8 +119,11 @@ is informational.
 
 ### Parser & helpers
 
-All schema-aware code lives in `bin/cloude_org.py` (stdlib-only —
-hook scripts run on bare `python3`):
+All schema-aware code lives in `bin/cloude_org.py`. The module is
+stdlib-only by convention rather than necessity — see [Why hot-path
+hooks don't use `uv run`](#why-hot-path-hooks-dont-use-uv-run) for
+the launcher that resolves the shared venv (orgparse, etc.) and the
+cold-start reasoning behind the split. The exposed surface:
 
 - `iter_log_entries(text)` / `latest_log_entry(text)` — yield one
   dict per entry with `stage`, `entered`, `entered_via`, `exited`,
@@ -387,12 +390,58 @@ who-has-the-ball tag in sync with what the agent is actually doing:
 heading parsing, the DoD-marker path helper, the per-stage `STAGE_DOD`
 bullets, and the `** Log` entry helpers (`iter_log_entries`,
 `latest_log_entry`, `append_log_entry_skeleton`, `set_dod_verdict`,
-`find_log_section`) through `bin/cloude_org.py`. Unlike the
-org-reading helper scripts, those scripts deliberately *don't* use
-`orgparse`: Claude Code's hook runner executes them on plain stdlib
-`python3`, not through `uv`, so a third-party import would fail —
-and the small, fixed grammar this touches is well within reach of a
-handful of regexes anyway.
+`find_log_section`) through `bin/cloude_org.py`.
+
+### Why hot-path hooks don't use `uv run`
+
+The hook scripts above and `cloude-task-set-state` are on the
+per-turn hot path — `Stop`, `UserPromptSubmit`, and
+`PreToolUse:AskUserQuestion` fire on every agent turn. Running each
+through `uv run --script` would pay `uv`'s resolution / venv-creation
+overhead per invocation (tens-to-hundreds of ms warm, more cold) —
+multiplied across every turn of every concurrent task, that adds up
+fast. So instead the dependencies are pre-resolved into a venv on
+disk once and the hooks re-exec into its Python:
+
+- `pyproject.toml` + `uv.lock` at the repo root declare the shared
+  Python deps (currently `orgparse>=0.4` and `inotify_simple>=1.3;
+  sys_platform=='linux'`). One source of truth across host and
+  container.
+- `make sync` (host) runs `uv sync --frozen --no-install-project`
+  into `./.venv-host/`.
+- The Dockerfile runs the same `uv sync` against the same lockfile
+  into `/opt/cloude-venv/` — outside the cloude repo's read-only
+  bind mount so the host's `.venv-host/` can't shadow it.
+- `bin/cloude-python` is a 5-line `sh` launcher that exec's the
+  in-container venv's `python3` if present, falling back to the
+  host venv. It self-locates via `$0`, so neither side needs
+  `cloude-python` on `PATH`.
+- Each Python hook carries an sh/Python polyglot shebang
+  (`#!/bin/sh` + a `:` no-op + `exec "$(dirname …)/cloude-python"`
+  + a closing `" """`) so the kernel runs `sh`, sh `exec`s the
+  launcher on this same file, and Python then re-reads it. The
+  polyglot string takes Python's implicit module-docstring slot, so
+  scripts that read `__doc__` (currently just `cloude-task-set-state`
+  for `--help`) rebind it with an explicit `__doc__ = """…"""`.
+
+`cloude-promote-setup` is a bash orchestrator with two inline
+`python3 - <<'PY'` heredocs. The template-renderer heredoc stays on
+`python3` (stdlib only); the log-entry-seeder heredoc — which
+imports `cloude_org` — runs through `cloude-python` so it picks up
+the same venv.
+
+`cloude_org.py` itself stays stdlib-only-by-convention for now —
+nothing forces it to import third-party packages, and the small,
+fixed grammar the heading + log-entry helpers operate on is well
+within reach of regexes. The launcher just means a future bump to
+add `orgparse` (or anything else) here is a one-line edit, not a
+shebang-and-image-rebuild project.
+
+The org-reading helper scripts (`cloude-dash`, `cloude-list-active`,
+`cloude-list-staging`, `cloude-task-info`) are off the hot path and
+keep their PEP 723 `uv run --script` shebangs — `uv` caches its
+resolutions, so warm starts are fast enough and the inline-deps
+header keeps each script self-describing.
 
 The settings file is baked into the image (Dockerfile `COPY
 docker/cloude-settings.json /etc/cloude/settings.json`) and surfaced

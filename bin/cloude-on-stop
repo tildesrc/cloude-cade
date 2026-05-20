@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""Stop hook handler — keep the heading tag honest, check the DoD sparingly.
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+__doc__ = """Stop hook handler — keep the heading tag honest, check the DoD sparingly.
 
 Fires at the end of every agent turn. It does two distinct jobs, and
 the split between them is the whole point of this hook:
@@ -76,9 +81,9 @@ import sys
 from pathlib import Path
 
 # The heading parser and the marker-path helper are shared with the
-# sibling hook scripts; all run on plain stdlib python3, so they live
-# in `cloude_org.py` rather than orgparse (see that module for the
-# full rationale).
+# sibling hook scripts. They live in `cloude_org.py` (one home for
+# the schema-aware code) and the polyglot shebang above re-execs us
+# through bin/cloude-python's venv, so future deps land cheaply.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import (  # noqa: E402
     ball_tag,

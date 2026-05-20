@@ -405,8 +405,12 @@ record "Rendered task file $TASK_FILE"
 # pre-seeded DoD checkboxes from `cloude_org.STAGE_DOD`. The stage
 # matches NEW_TODO (PLANNING for standard mode, ITERATING for ADOPT).
 # Best-effort: a seeding failure warns but does not undo the render.
+#
+# Run through cloude-python rather than bare python3 so cloude_org
+# can grow third-party deps (orgparse, etc.) without breaking this
+# host-side import path. See bin/cloude-python for venv-resolution.
 
-if ! CLOUDE_ROOT="$CLOUDE_ROOT" python3 - <<'PY' "$TASK_FILE" "$NEW_TODO"
+if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" - <<'PY' "$TASK_FILE" "$NEW_TODO"
 import os
 import sys
 from pathlib import Path
