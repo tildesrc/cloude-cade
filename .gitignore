@@ -22,6 +22,11 @@ Thumbs.db
 __pycache__/
 *.pyc
 
+# Host-side venv built by `make sync` from pyproject.toml + uv.lock.
+# Lives outside the container venv (/opt/cloude-venv/) so the cloude
+# repo's read-only bind mount doesn't shadow it.
+.venv-host/
+
 # User-specific task data — captured per-machine, not part of the repo.
 /tasks/staging.org
 /tasks/active/*.org

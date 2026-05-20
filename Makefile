@@ -3,7 +3,15 @@ VOLUME := cloude-claude-creds
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 
-.PHONY: help build rebuild shell login info clean-image clean-volume clean-dind-data clean
+# Host-side Python venv for the bin/ helpers that import third-party
+# packages (orgparse, etc.). Built from pyproject.toml + uv.lock by
+# `make sync`. The matching container venv lives at /opt/cloude-venv/
+# inside the image (built in the Dockerfile from the same lockfile).
+# Pinned to a distinct name so the cloude repo's bind-mount into the
+# container can't shadow /opt/cloude-venv/.
+HOST_VENV := .venv-host
+
+.PHONY: help build rebuild shell login info sync clean-image clean-volume clean-dind-data clean-venv clean
 
 help:
 	@echo "Targets:"
@@ -11,11 +19,13 @@ help:
 	@echo "  rebuild       Build with --no-cache"
 	@echo "  shell         Open a bash shell in a transient container"
 	@echo "  login         Run claude interactively to perform first-time login"
+	@echo "  sync          Build the host venv ($(HOST_VENV)/) from uv.lock"
 	@echo "  info          Show image and volume status"
 	@echo "  clean-image   Remove the image"
 	@echo "  clean-volume  Remove the credentials volume (forces re-login)"
 	@echo "  clean-dind-data  Remove per-task DinD data volumes (cloude-dind-*)"
-	@echo "  clean         clean-image + clean-volume + clean-dind-data"
+	@echo "  clean-venv    Remove the host venv ($(HOST_VENV)/)"
+	@echo "  clean         clean-image + clean-volume + clean-dind-data + clean-venv"
 
 build:
 	docker build \
@@ -52,6 +62,9 @@ info:
 	@echo "Volume:"
 	@docker volume inspect $(VOLUME) 2>/dev/null || echo "  (not created)"
 
+sync:
+	UV_PROJECT_ENVIRONMENT=$(HOST_VENV) uv sync --frozen --no-install-project
+
 clean-image:
 	-docker image rm $(IMAGE)
 
@@ -68,4 +81,7 @@ clean-dind-data:
 		echo "No cloude-dind-* volumes to remove."; \
 	fi
 
-clean: clean-image clean-volume clean-dind-data
+clean-venv:
+	-rm -rf $(HOST_VENV)
+
+clean: clean-image clean-volume clean-dind-data clean-venv

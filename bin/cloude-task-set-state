@@ -1,5 +1,15 @@
-#!/usr/bin/env python3
-"""Rewrite the first heading of a cloude task .org file in place.
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+# `from __future__` must precede the `__doc__` rebind below — the
+# polyglot string on lines 2-6 already counts as the module's
+# implicit docstring, so __future__ comes second (allowed), and the
+# rebind comes third (which would otherwise be too late for futures).
+from __future__ import annotations
+__doc__ = """Rewrite the first heading of a cloude task .org file in place.
 
 Flips the TODO keyword and/or the who-has-the-ball tag without the
 caller having to re-derive the org heading regex. Used by the
@@ -63,18 +73,17 @@ Exit codes:
 
 This script edits org text with a single regex rather than orgparse:
 orgparse exposes no node byte/line ranges to write back through, and
-the heading grammar this touches is small and fixed. It needs no
-third-party dependency, so it runs on plain python3.
+the heading grammar this touches is small and fixed. It runs through
+bin/cloude-python (the shared venv) like the other hot-path hooks —
+see docs/internals.md → "Why hot-path hooks don't use `uv run`".
 """
-
-from __future__ import annotations
 
 import re
 import shlex
 import sys
 from pathlib import Path
 
-# The log-entry helpers + STAGE_DOD live in the sibling stdlib-only
+# The log-entry helpers + STAGE_DOD live in the sibling cloude_org
 # module so the hook scripts can reuse them.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import (  # noqa: E402

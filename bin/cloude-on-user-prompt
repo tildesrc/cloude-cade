@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""UserPromptSubmit hook handler — mark the task `:agent:` when work resumes.
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+__doc__ = """UserPromptSubmit hook handler — mark the task `:agent:` when work resumes.
 
 Fires at the start of every agent turn (when the user submits a
 prompt). If the in-container task is in an in-flight stage (PLANNING /
@@ -39,9 +44,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The heading parser is shared with bin/cloude-on-stop; both hooks run
-# on plain stdlib python3, so it lives in a sibling module rather than
-# orgparse (see cloude_org.py for the full rationale).
+# The heading parser is shared with the sibling hook scripts. Both
+# this hook and cloude_org.py run under bin/cloude-python's venv via
+# the polyglot shebang above (see docs/internals.md).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import ball_tag, parse_heading  # noqa: E402
 
