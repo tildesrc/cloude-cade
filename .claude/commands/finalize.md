@@ -42,6 +42,8 @@ The script bails with distinct exit codes when it needs a decision. In each case
 
 - **Exit 13** — DinD volume is still in use. The script listed which containers are holding it. Ask the user: skip the volume cleanup (leaves the volume in place) or abort? On confirm, rerun with `--skip-volume`.
 
+- **Exit 14** — worktree contains files owned by another user (typically root, from an in-container DinD test stack: `coverage/`, `tmp/minio/`, `tmp/dbdata/`, etc.). The host user can't unlink them, so `git worktree remove --force` fails with `Permission denied`. The script reports the foreign-owned file count. Ask the user: nuke the dir via a privileged `docker run --user root … rm -rf` (destructive — discards everything in the worktree) or abort? On confirm, rerun with `--force-root` (this implies `--force-worktree`).
+
 Any other non-zero exit is a hard failure: relay stderr to the user and stop. The script's "Succeeded so far" trail (when present) tells the user what was already done.
 
 ## 4. Report

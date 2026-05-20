@@ -24,9 +24,16 @@
 #        --force-worktree to retry with git's --force.
 #   13 — DinD volume removal failed because something is using it.
 #        Pass --skip-volume to leave it in place.
+#   14 — Worktree contains files owned by another user (e.g. root,
+#        from in-container DinD test runs), which the host user can't
+#        unlink. Pass --force-root to nuke the dir via a privileged
+#        `docker run --user root` step (implies --force-worktree).
 #
 # Anything else is a hard failure: 20 (gh pr close), 21 (file move),
-# 22 (task-info), 23 (heading rewrite), 30 (arg validation).
+# 22 (task-info), 23 (heading rewrite), 25 (worktree remove failed
+# even with --force-worktree, non-permission reason), 26 (root
+# cleanup ran but worktree dir still present afterward),
+# 30 (arg validation).
 
 set -euo pipefail
 
@@ -38,6 +45,10 @@ Options:
   --force-drop       Treat non-terminal TODO as DROPPED; flip the
                      heading's keyword in place and proceed.
   --force-worktree   Pass --force to 'git worktree remove'.
+  --force-root       Nuke a worktree containing files owned by another
+                     user (e.g. root, from in-container DinD test runs)
+                     via 'docker run --rm --user root … rm -rf'.
+                     Implies --force-worktree.
   --skip-volume      Skip DinD volume removal.
 
 Exit codes:
@@ -46,6 +57,7 @@ Exit codes:
   11  TODO not COMPLETE/DROPPED, --force-drop not given
   12  worktree dirty / locked, --force-worktree not given
   13  DinD volume in use, --skip-volume not given
+  14  worktree contains foreign-owned files, --force-root not given
   20+ other failure (stderr names the step)
   30  argument validation
 EOF
@@ -59,12 +71,14 @@ fi
 TASK_FILE=""
 FORCE_DROP=false
 FORCE_WORKTREE=false
+FORCE_ROOT=false
 SKIP_VOLUME=false
 
 while (($#)); do
     case "$1" in
         --force-drop)     FORCE_DROP=true ;;
         --force-worktree) FORCE_WORKTREE=true ;;
+        --force-root)     FORCE_ROOT=true; FORCE_WORKTREE=true ;;
         --skip-volume)    SKIP_VOLUME=true ;;
         -h|--help)        usage; exit 0 ;;
         --)               shift; TASK_FILE="$1" ;;
@@ -170,6 +184,16 @@ if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
 fi
 
 # --- Step 4: remove worktree -----------------------------------------------
+#
+# Escalation tiers:
+#   Tier 1: 'git worktree remove [--force]' as usual.
+#   Tier 2: on failure, if the worktree contains foreign-owned files
+#           (e.g. root, written by in-container DinD test runs), this
+#           is the --force-root case — either bail with exit 14, or
+#           nuke via 'docker run --rm --user root … rm -rf'.
+#   Tier 3: on failure with no foreign-owned files, fall back to the
+#           existing exit 12 (no --force-worktree) / 25 (had --force-
+#           worktree, still failed for some other reason) paths.
 
 remove_worktree() {
     local extra=()
@@ -179,20 +203,79 @@ remove_worktree() {
     git -C "$SOURCE_CLONE" worktree remove "${extra[@]}" "$WORKTREE"
 }
 
+# Count files under $WORKTREE not owned by the running user. Suppresses
+# the noisy "Permission denied" find prints because the host user may
+# legitimately be unable to descend into root-owned dirs — for our
+# purposes, the dir entry itself is already evidence enough.
+foreign_owned_count() {
+    [[ -d "$WORKTREE" ]] || { echo 0; return; }
+    find "$WORKTREE" -not -user "$(id -un)" 2>/dev/null | wc -l
+}
+
+# Docker-as-root rm of the worktree directory. Mounts the parent dir
+# so 'rm -rf' can remove the slug dir itself (you can't unlink the
+# mount point from inside the container).
+nuke_worktree_as_root() {
+    local parent slug
+    parent="$(dirname "$WORKTREE")"
+    slug="$(basename "$WORKTREE")"
+    docker run --rm --user root --entrypoint /bin/bash \
+        -v "$parent":/wt:rw \
+        cloude -c "rm -rf -- /wt/$(printf %q "$slug")"
+}
+
+ROOT_CLEANED=false
 if ! err="$(remove_worktree 2>&1)"; then
-    if $FORCE_WORKTREE; then
+    foreign="$(foreign_owned_count)"
+    if (( foreign > 0 )); then
+        # Tier 2: foreign-owned files (typically root, from DinD).
+        if ! $FORCE_ROOT; then
+            echo "ERROR: worktree contains $foreign file(s) not owned by $(id -un):" >&2
+            echo "$err" >&2
+            echo "       these are typically root-owned artifacts written by an" >&2
+            echo "       in-container DinD test stack (e.g. coverage/, tmp/minio/," >&2
+            echo "       tmp/dbdata/). The host user can't unlink them." >&2
+            echo "       pass --force-root to nuke via 'docker run --user root'" >&2
+            echo "       (implies --force-worktree)." >&2
+            exit 14
+        fi
+        echo "Worktree has $foreign foreign-owned file(s); running root cleanup…" >&2
+        if ! nuke_worktree_as_root >&2; then
+            echo "ERROR: 'docker run --user root … rm -rf' failed for $WORKTREE" >&2
+            exit 26
+        fi
+        # Clear stale .git/worktrees/<name>/ bookkeeping that git
+        # would otherwise leave behind once the dir is gone.
+        git -C "$SOURCE_CLONE" worktree prune >&2 || true
+        if [[ -d "$WORKTREE" ]]; then
+            echo "ERROR: root cleanup ran but $WORKTREE still exists" >&2
+            exit 26
+        fi
+        ROOT_CLEANED=true
+    elif $FORCE_WORKTREE; then
+        # Tier 3a: --force was given, no foreign-owned files — some
+        # other failure (locked, etc.). Hard fail.
         echo "ERROR: worktree removal failed even with --force-worktree:" >&2
         echo "$err" >&2
         exit 25
+    else
+        # Tier 3b: dirty/locked, no --force-worktree.
+        echo "ERROR: worktree removal failed (dirty / locked / untracked files):" >&2
+        echo "$err" >&2
+        if [[ -d "$WORKTREE" ]]; then
+            echo "--- git status --short ---" >&2
+            git -C "$WORKTREE" status --short >&2 || true
+        fi
+        echo "       pass --force-worktree to discard and retry." >&2
+        exit 12
     fi
-    echo "ERROR: worktree removal failed (dirty / locked / untracked files):" >&2
-    echo "$err" >&2
-    if [[ -d "$WORKTREE" ]]; then
-        echo "--- git status --short ---" >&2
-        git -C "$WORKTREE" status --short >&2 || true
-    fi
-    echo "       pass --force-worktree to discard and retry." >&2
-    exit 12
+fi
+
+WORKTREE_RESULT="removed"
+if $ROOT_CLEANED; then
+    WORKTREE_RESULT="removed (forced; root cleanup)"
+elif $FORCE_WORKTREE; then
+    WORKTREE_RESULT="removed (forced)"
 fi
 
 # --- Step 5: remove DinD volume --------------------------------------------
@@ -246,7 +329,7 @@ cat <<EOF
 Final state: $TODO$( $FORCED_DROP && echo " (force-dropped from previous state)" )
 Task file: moved → $DEST
 tmux session $TMUX_SESSION: $( $TMUX_KILLED && echo killed || echo "was not running" )
-Worktree $WORKTREE: removed$( $FORCE_WORKTREE && echo " (forced)" )
+Worktree $WORKTREE: $WORKTREE_RESULT
 DinD volume $DIND_VOLUME: $VOLUME_REMOVED
 Local branch $BRANCH: $BRANCH_RESULT
 PR $PR: $( [[ "$TODO" == "COMPLETE" ]] && echo "confirmed MERGED" || echo "closed" )
