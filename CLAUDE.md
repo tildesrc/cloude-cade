@@ -199,6 +199,77 @@ happen from the host via `/finalize`.
 - `MERGING` — `:agent:` while you manage the merge queue, `:user:` if
   something requires human judgment to resolve.
 
+### Per-stage log entry
+
+Every stage entry / re-entry appends one *log entry* under the task
+file's `** Log` section. The entry is the per-stage audit trail —
+*what was asked, what was done, and whether the Definition of Done
+was met* — and the stop hook's DoD check is a deterministic parse of
+its DoD verdict, not a transcript-level reminder.
+
+Shape:
+
+```
+*** [2026-05-20 Wed 11:30] ITERATING (via /advance from PLANNING)
+    :PROPERTIES:
+    :STAGE:       ITERATING
+    :ENTERED:     [2026-05-20 Wed 11:30]
+    :ENTERED_VIA: /advance from PLANNING
+    :END:
+**** Request
+     Paraphrase of what the user asked for this stage.
+**** Work
+     What you did (updated over the stage's lifetime).
+**** [N/M] <VERDICT> DoD
+     - [ ]/[X]/[-] (one per stage-DoD bullet)
+```
+
+The verdict (`PENDING` / `UNSATISFIABLE` / `PASS`) is the org TODO
+keyword on the `**** DoD` heading, drawn from the file's secondary
+`#+TODO:` sequence (`PENDING(P!) UNSATISFIABLE(U!) | PASS(D!)`). The
+`[N/M]` cookie auto-tracks how many checkboxes are ticked (`[X]`) or
+N/A (`[-]`).
+
+Lifecycle:
+
+- `/promote` seeds the initial PLANNING (or ITERATING, in ADOPT
+  mode) entry with `**** [/] PENDING DoD` plus one `- [ ]` per
+  stage-DoD bullet.
+- `/advance` and `/iterate` (and `/drop`) flip the level-1 stage and
+  also append a fresh entry skeleton via `bin/cloude-task-set-state`,
+  stamping `:EXITED:` and `:DURATION:` on the previous entry.
+- The agent fills `**** Request` / `**** Work` as the stage
+  progresses, ticks (`[X]`) or marks N/A (`[-]`) each DoD checkbox
+  as it's resolved, and flips the verdict via:
+
+  ```
+  cloude-task-set-state $CLOUDE_TASK_FILE --dod-state {pass|unsatisfiable}
+  ```
+
+  with an optional `--reason "..."` (replaces the body prose).
+
+Consistency rule (enforced by the flip command *and* the stop hook):
+
+- `PASS` requires every checkbox ticked (`[X]`) or N/A (`[-]`) —
+  no `[ ]`.
+- `UNSATISFIABLE` requires at least one open `[ ]` box (documenting
+  what *can't* be met).
+- `PENDING` has no checkbox constraint.
+
+The stop hook (`bin/cloude-on-stop`) consumes the per-transition DoD
+marker and blocks once if the latest log entry's verdict is `PENDING`
+(or the verdict/cookie are inconsistent, or the `** Log` section is
+missing, or the latest entry's `:STAGE:` doesn't match the level-1
+TODO keyword). It does **not** fire on ordinary turns or once the
+verdict is `PASS` / `UNSATISFIABLE` — so the agent's organic
+end-of-turn message stays as the visible last content on every
+happy path.
+
+The per-stage DoD bullets live in code at `bin/cloude_org.STAGE_DOD`
+(consumed by the skeleton generator and the hook) and are mirrored
+in the *Stage details* section above as the human-facing copy. Edit
+both when a bullet changes.
+
 ### Who-has-the-ball tag
 
 Every in-flight task heading carries a tag indicating who currently

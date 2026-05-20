@@ -13,13 +13,20 @@ the split between them is the whole point of this hook:
    deliberate state the agent may set to keep the ball off the user);
    MERGING is never touched (agent-driven — `/babysit-merge` owns it).
 
-2. A Definition-of-Done reminder, but only at the end of a turn that
+2. A Definition-of-Done check, but only at the end of a turn that
    began with a stage transition or an `/iterate`. Those turns drop a
    marker file (see `cloude_org.dod_marker_path`); this hook consumes
-   the marker and, only then, blocks the stop once to inject the
-   current stage's DoD checklist. An ordinary conversational turn
-   drops no marker, so it gets no block and no reminder text crowding
-   out the agent's actual answer.
+   the marker and, only then, inspects the latest `*** ` entry in the
+   task file's `** Log` section. The verdict is the TODO keyword on
+   that entry's `**** DoD` sub-sub-heading (drawn from the secondary
+   `#+TODO:` sequence — PENDING / UNSATISFIABLE / PASS), and the
+   per-bullet checkboxes inside the DoD body must agree with it
+   (PASS requires every box ticked or N/A; UNSATISFIABLE requires at
+   least one open). The hook blocks only when the verdict is PENDING,
+   the cookie/verdict are inconsistent, or the schema is broken
+   (missing `** Log`, missing latest entry, stage mismatch). On every
+   happy path the hook stays silent — the agent's organic end-of-turn
+   message remains the visible last content.
 
 If the agent ends a turn while still waiting on background work, this
 hook is a full no-op — no tag flip, no DoD reminder, and the DoD
@@ -40,7 +47,7 @@ agent kicks off, so the dashboard accurately shows `:agent:` while
 the agent is genuinely waiting on work it owns.
 
 The single-block-per-stop guarantee comes from honoring the harness's
-`stop_hook_active` flag: when set, the DoD reminder is skipped, so the
+`stop_hook_active` flag: when set, the DoD check is skipped, so the
 model cannot get stuck in a block loop.
 
 Everything else is a silent no-op (no task file, unparseable heading,
@@ -55,8 +62,10 @@ job 1 keeps that honest without nagging the agent on every turn.
 Registered via /etc/cloude/settings.json, which bin/cloude-run wires
 in by passing `--settings /etc/cloude/settings.json` to claude.
 
-The DoD bullets below mirror CLAUDE.md's `#### <STAGE>` sections
-("Stage details"). If you edit one, edit the other.
+The per-stage DoD bullets live in `cloude_org.STAGE_DOD` (the same
+module that defines the log-entry schema and the verdict-flip helper).
+`CLAUDE.md`'s `#### <STAGE>` sections mirror those bullets as the
+human-facing copy; if you edit one, edit the other.
 """
 
 import json
@@ -71,7 +80,13 @@ from pathlib import Path
 # in `cloude_org.py` rather than orgparse (see that module for the
 # full rationale).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloude_org import ball_tag, dod_marker_path, parse_heading  # noqa: E402
+from cloude_org import (  # noqa: E402
+    ball_tag,
+    dod_marker_path,
+    find_log_section,
+    latest_log_entry,
+    parse_heading,
+)
 
 # In-flight stages — the terminal COMPLETE / DROPPED states get neither
 # a tag flip nor a DoD reminder.
@@ -91,29 +106,6 @@ BABYSIT_STATE_FILES = (
 )
 
 
-DOD = {
-    "PLANNING": [
-        "The plan is written into the task's org file.",
-        "The user has approved the plan.",
-        "A draft PR has been created on GitHub.",
-    ],
-    "ITERATING": [
-        "The plan is implemented in code.",
-        "All user requests are implemented in code.",
-        "New and relevant tests pass locally.",
-        "Changes are committed and pushed.",
-        "CI tests are passing, or any failures can be attributed to irrelevant flakes.",
-        "The PR title and description on GitHub reflect the final change (not the draft-PR placeholder).",
-    ],
-    "REVIEW": [
-        "The PR has been reviewed.",
-    ],
-    "MERGING": [
-        "The PR is merged.",
-    ],
-}
-
-
 def main() -> int:
     try:
         hook_input = json.load(sys.stdin)
@@ -124,7 +116,8 @@ def main() -> int:
     if not task or not Path(task).is_file():
         return 0
 
-    parsed = parse_heading(Path(task).read_text())
+    content = Path(task).read_text()
+    parsed = parse_heading(content)
     if parsed is None:
         return 0
 
@@ -136,7 +129,7 @@ def main() -> int:
     # the agent is still actively waiting on work it owns. Stay silent:
     # don't flip the tag, don't consume the DoD marker (so a transition
     # turn that ended with background work pending still gets its DoD
-    # reminder once the background work finally settles).
+    # check once the background work finally settles).
     if should_stay_silent(hook_input):
         return 0
 
@@ -148,23 +141,49 @@ def main() -> int:
 
     ball = ball_tag(tags)
 
-    # DoD reminder: only when this turn began with a transition /
+    # DoD check: only when this turn began with a transition /
     # `/iterate` (marker armed), only while the agent still holds the
     # ball, and only once per stop cycle (honor `stop_hook_active`).
     if (
         marker_armed
         and ball == "agent"
-        and state in DOD
         and not hook_input.get("stop_hook_active")
     ):
-        print(json.dumps({"decision": "block", "reason": build_reason(state)}))
-        return 0
+        reason = check_dod(content, state)
+        if reason is not None:
+            print(json.dumps({"decision": "block", "reason": reason}))
+            return 0
 
     # Deterministic hand-back: the agent stopped holding the ball in a
     # user-driven stage, so flip it to `:user:` for the dashboard.
     if ball == "agent" and state in AUTO_HANDBACK:
         flip_to_user(task)
     return 0
+
+
+def check_dod(content: str, state: str) -> str | None:
+    """Inspect the latest log entry for the current stage; return a
+    block reason if the DoD is not satisfied (or absent / malformed),
+    or None to stay silent.
+    """
+    if find_log_section(content) is None:
+        return build_missing_log_reason()
+    entry = latest_log_entry(content)
+    if entry is None:
+        return build_empty_log_reason(state)
+    if entry["stage"] != state:
+        return build_schema_mismatch_reason(entry["stage"], state)
+    verdict = entry["dod_verdict"]
+    boxes = entry["dod_checkboxes"]
+    n_open = sum(1 for c in boxes if c == "open")
+    n_total = len(boxes)
+    if verdict == "PENDING":
+        return build_pending_dod_reason(state)
+    if verdict == "PASS" and n_open > 0:
+        return build_pass_mismatch_reason(state, n_open, n_total)
+    if verdict == "UNSATISFIABLE" and n_total > 0 and n_open == 0:
+        return build_unsat_mismatch_reason(state)
+    return None
 
 
 def should_stay_silent(hook_input: dict) -> bool:
@@ -298,35 +317,126 @@ def flip_to_user(task: str) -> None:
         sys.stderr.write(f"cloude-on-stop: tag flip failed: {detail}\n")
 
 
-def build_reason(state: str) -> str:
-    """The DoD reminder injected once at the end of a transition turn."""
-    bullets = "\n".join(f"  - {b}" for b in DOD[state])
+_FLIP_HINT = (
+    "Flip the verdict with:\n"
+    "  cloude-task-set-state $CLOUDE_TASK_FILE --dod-state {pass|unsatisfiable}\n"
+    "  (use --reason \"...\" to record an UNSATISFIABLE explanation)\n"
+    "The command refuses inconsistent flips: PASS requires every\n"
+    "checkbox ticked (`[X]`) or N/A (`[-]`); UNSATISFIABLE requires at\n"
+    "least one open (`[ ]`) box. Tick the boxes by hand-editing the\n"
+    "DoD body before running the flip."
+)
 
-    if state == "MERGING":
-        tail = (
-            "MERGING is agent-driven: invoke `/babysit-merge` to drive the\n"
-            "merge queue through to a landed PR. That skill owns the\n"
-            "heading tag for the MERGING stage — not this hook."
-        )
-    else:
-        tail = (
-            f"If `{state}`'s work isn't finished, keep going. If it is,\n"
-            f"just stop — this hook hands the ball back to the user for\n"
-            f"you, so you don't need to retag the heading by hand. To\n"
-            f"keep the ball off the user (waiting on something external),\n"
-            f"set the heading tag to `:blocked:` yourself."
-        )
 
+def build_pending_dod_reason(state: str) -> str:
+    """The verdict is still PENDING at the end of a transition turn."""
     return (
-        f"This turn began with a transition into `{state}` (or an "
-        f"`/iterate`).\n"
-        f"Before it ends, walk through `{state}`'s Definition of Done:\n"
-        f"{bullets}\n"
+        f"The latest `*** ` entry in your task file's `** Log` section is "
+        f"for stage `{state}`, and its `**** DoD` sub-sub-heading is "
+        f"still `PENDING`. Before this turn ends:\n"
         f"\n"
-        f"{tail}\n"
+        f"  - Fill in `**** Request` (a paraphrase of what the user "
+        f"asked for this stage).\n"
+        f"  - Fill in `**** Work` (what you've done so far — will be "
+        f"updated over the stage's lifetime).\n"
+        f"  - For each `- [ ]` bullet under `**** DoD`, mark it `[X]` "
+        f"(met), `[-]` (N/A), or leave it `[ ]` (unmet).\n"
+        f"  - Run the flip:\n"
         f"\n"
-        f"(This DoD reminder fires once per stop cycle, and only on\n"
-        f"transition / `/iterate` turns — never on an ordinary turn.)"
+        f"{_FLIP_HINT}\n"
+        f"\n"
+        f"The per-stage DoD bullets you're verifying live in CLAUDE.md "
+        f"→ Stage details → `{state}` → Definition of done (mirrored as "
+        f"the checkbox text under `**** DoD`).\n"
+        f"\n"
+        f"This check fires once per stop cycle, and only on transition "
+        f"/ `/iterate` turns — never on an ordinary turn. Once the "
+        f"verdict is PASS or UNSATISFIABLE, the hook stays out of your "
+        f"way."
+    )
+
+
+def build_pass_mismatch_reason(state: str, n_open: int, n_total: int) -> str:
+    """Verdict is PASS but boxes are still open — inconsistent."""
+    return (
+        f"The latest `*** {state}` log entry's verdict is `PASS`, but "
+        f"{n_open} of {n_total} DoD checkboxes are still `[ ]` "
+        f"(unchecked). PASS requires every box to be `[X]` or `[-]`.\n"
+        f"\n"
+        f"Either:\n"
+        f"  - Tick the remaining boxes (and re-flip if needed), or\n"
+        f"  - Flip to UNSATISFIABLE with an explanation:\n"
+        f"      cloude-task-set-state $CLOUDE_TASK_FILE \\\n"
+        f"          --dod-state unsatisfiable --reason \"...\""
+    )
+
+
+def build_unsat_mismatch_reason(state: str) -> str:
+    """Verdict is UNSATISFIABLE but every box is ticked — inconsistent."""
+    return (
+        f"The latest `*** {state}` log entry's verdict is "
+        f"`UNSATISFIABLE`, but every DoD checkbox is ticked or N/A. "
+        f"UNSATISFIABLE requires at least one open `[ ]` box "
+        f"(documenting what *can't* be met).\n"
+        f"\n"
+        f"If every bullet is genuinely met, flip to PASS:\n"
+        f"  cloude-task-set-state $CLOUDE_TASK_FILE --dod-state pass"
+    )
+
+
+def build_missing_log_reason() -> str:
+    """No `** Log` section in the task file — schema not migrated."""
+    return (
+        "This task file has no `** Log` section. The DoD workflow now "
+        "tracks per-stage state in structured log entries; the file "
+        "needs to be migrated by hand.\n"
+        "\n"
+        "Add a `** Log` heading near the bottom of the file (before "
+        "any `# Local Variables:` block) and, for the *current* stage, "
+        "append an entry skeleton with the shape:\n"
+        "\n"
+        "  *** [<now>] <STAGE> (via /promote)\n"
+        "      :PROPERTIES:\n"
+        "      :STAGE:       <STAGE>\n"
+        "      :ENTERED:     [<now>]\n"
+        "      :ENTERED_VIA: /promote\n"
+        "      :END:\n"
+        "  **** Request\n"
+        "  **** Work\n"
+        "  **** [/] PENDING DoD\n"
+        "       - [ ] (one bullet per CLAUDE.md DoD criterion for "
+        "<STAGE>)\n"
+        "\n"
+        "Also add a second `#+TODO:` directive near the top of the "
+        "file so the verdict keyword renders correctly:\n"
+        "  #+TODO: PENDING(P!) UNSATISFIABLE(U!) | PASS(D!)\n"
+        "\n"
+        "Then re-run the transition that triggered this check."
+    )
+
+
+def build_empty_log_reason(state: str) -> str:
+    """`** Log` section exists but has no entries."""
+    return (
+        f"This task's `** Log` section has no `*** ` entries, but the "
+        f"current stage is `{state}`. Add an entry skeleton for "
+        f"`{state}` (see CLAUDE.md → Per-stage log entry for the "
+        f"shape) and re-run."
+    )
+
+
+def build_schema_mismatch_reason(latest_stage: str, current_state: str) -> str:
+    """Latest log entry's :STAGE: doesn't match the level-1 TODO keyword."""
+    return (
+        f"Schema mismatch: the level-1 heading's TODO keyword is "
+        f"`{current_state}`, but the latest `** Log` entry's "
+        f"`:STAGE:` property is `{latest_stage}`. This usually means "
+        f"the slash command that flipped the stage didn't append a "
+        f"fresh log-entry skeleton — likely a bug.\n"
+        f"\n"
+        f"To recover by hand: append a new `*** [<now>] {current_state} "
+        f"(via /...)` entry under `** Log` (mirroring the existing "
+        f"entries' shape) and re-run the transition."
     )
 
 

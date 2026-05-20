@@ -8,24 +8,54 @@ by bin/cloude-finalize-cleanup, so the structural edit of a task
 heading lives in exactly one place.
 
 Usage:
-    cloude-task-set-state <task-file> [--todo NAME] [--tag NAME]
+    cloude-task-set-state <task-file> [--todo NAME] [--tag NAME] [--via TEXT]
+    cloude-task-set-state <task-file> --dod-state NAME [--reason TEXT]
 
-At least one of --todo / --tag must be given:
-  --todo NAME   replace the TODO keyword (must be a known keyword).
+The first form rewrites the level-1 stage heading:
+  --todo NAME   replace the TODO keyword (must be a known stage keyword).
+                On a transition, also appends a fresh log-entry skeleton
+                under `** Log` (with pre-seeded DoD checkboxes from
+                `cloude_org.STAGE_DOD`) and stamps :EXITED: + :DURATION:
+                on the previous entry.
   --tag  NAME   replace the entire trailing tag chain with a single
                 :NAME: tag.
+  --via TEXT    text that goes into the new entry's :ENTERED_VIA: field
+                (e.g. `/advance`, `/iterate`, `/drop`). Auto-detected
+                from the transition direction if omitted: forward
+                stage moves use `/advance`, backward (re-entry) moves
+                use `/iterate`, and any move into DROPPED uses
+                `/drop`.
 An omitted flag leaves that part of the heading unchanged. The heading
 text and everything below the heading are always preserved.
 
-On success, prints the resulting state as shell-safe KEY=VALUE lines:
+The second form rewrites the latest log entry's `**** DoD` sub-sub-
+heading:
+  --dod-state NAME    new verdict — PENDING / UNSATISFIABLE / PASS.
+                      Refused if it would violate the verdict/cookie
+                      consistency rule (PASS requires every checkbox
+                      ticked or N/A; UNSATISFIABLE requires at least
+                      one open box). Appends a state-change entry to
+                      the DoD heading's LOGBOOK drawer; on PASS,
+                      also writes a CLOSED: timestamp.
+  --reason TEXT       optional — replaces the prose block below the
+                      checkbox lines (the per-bullet `- [ ]/[X]/[-]`
+                      lines are preserved).
+
+On success of the first form, prints the resulting state as shell-safe
+KEY=VALUE lines:
     TODO=ITERATING
     TAG=agent
 (TAG is empty when the heading carries no who-has-the-ball tag.)
 
+On success of the second form, prints:
+    DOD_VERDICT=PASS
+
 Exit codes:
     0   success
-    2   file not found, or no task heading found
-    30  argument validation (no flags, unknown TODO keyword, bad tag)
+    2   file not found, or no task heading found, or no log entries
+    30  argument validation (no flags, unknown TODO keyword, bad tag,
+        --dod-state combined with --todo/--tag)
+    31  --dod-state would violate the verdict/cookie consistency rule
 
 This script edits org text with a single regex rather than orgparse:
 orgparse exposes no node byte/line ranges to write back through, and
@@ -40,16 +70,23 @@ import shlex
 import sys
 from pathlib import Path
 
-# `dod_marker_path` is shared with the cloude-on-stop / cloude-on-plan-
-# accepted hooks. cloude_org.py is a stdlib-only sibling module (see its
-# docstring for why the hook scripts can't depend on orgparse).
+# The log-entry helpers + STAGE_DOD live in the sibling stdlib-only
+# module so the hook scripts can reuse them.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloude_org import dod_marker_path  # noqa: E402
+from cloude_org import (  # noqa: E402
+    DOD_KEYWORDS,
+    DodConsistencyError,
+    append_log_entry_skeleton,
+    dod_marker_path,
+    find_log_section,
+    now_ts,
+    set_dod_verdict,
+)
 
 TODO_KEYWORDS = ("PLANNING", "ITERATING", "REVIEW", "MERGING", "COMPLETE", "DROPPED")
 # The in-flight (non-terminal) stages. A `--todo` change into one of
 # these is a stage transition that should arm the next `Stop`'s DoD
-# reminder; COMPLETE / DROPPED are terminal and arm nothing.
+# check; COMPLETE / DROPPED are terminal and arm nothing.
 IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
 BALL_TAGS = ("agent", "user", "blocked")
 
@@ -78,10 +115,28 @@ def _ball_tag(tag_chain: str) -> str:
     return ""
 
 
+def _bail(msg: str, code: int = 30) -> int:
+    sys.stderr.write(f"cloude-task-set-state: {msg}\n")
+    return code
+
+
+def _infer_via(prev_todo: str, new_todo: str) -> str:
+    """Default :ENTERED_VIA: text based on the transition direction."""
+    if new_todo == "DROPPED":
+        return "/drop"
+    order = {k: i for i, k in enumerate(TODO_KEYWORDS)}
+    if order.get(new_todo, 0) < order.get(prev_todo, 0):
+        return "/iterate"
+    return "/advance"
+
+
 def main(argv: list[str]) -> int:
     task_file: str | None = None
     new_todo: str | None = None
     new_tag: str | None = None
+    new_via: str | None = None
+    new_dod: str | None = None
+    dod_reason: str | None = None
 
     i = 0
     while i < len(argv):
@@ -89,50 +144,78 @@ def main(argv: list[str]) -> int:
         if arg == "--todo":
             i += 1
             if i >= len(argv):
-                sys.stderr.write("cloude-task-set-state: --todo needs a value\n")
-                return 30
+                return _bail("--todo needs a value")
             new_todo = argv[i]
         elif arg == "--tag":
             i += 1
             if i >= len(argv):
-                sys.stderr.write("cloude-task-set-state: --tag needs a value\n")
-                return 30
+                return _bail("--tag needs a value")
             new_tag = argv[i]
+        elif arg == "--via":
+            i += 1
+            if i >= len(argv):
+                return _bail("--via needs a value")
+            new_via = argv[i]
+        elif arg == "--dod-state":
+            i += 1
+            if i >= len(argv):
+                return _bail("--dod-state needs a value")
+            new_dod = argv[i]
+        elif arg == "--reason":
+            i += 1
+            if i >= len(argv):
+                return _bail("--reason needs a value")
+            dod_reason = argv[i]
         elif arg in ("-h", "--help"):
             sys.stdout.write(__doc__ or "")
             return 0
         elif arg.startswith("-"):
-            sys.stderr.write(f"cloude-task-set-state: unknown flag: {arg}\n")
-            return 30
+            return _bail(f"unknown flag: {arg}")
         elif task_file is None:
             task_file = arg
         else:
-            sys.stderr.write(f"cloude-task-set-state: extra argument: {arg}\n")
-            return 30
+            return _bail(f"extra argument: {arg}")
         i += 1
 
     if task_file is None:
         sys.stderr.write(
             "usage: cloude-task-set-state <task-file> [--todo NAME] [--tag NAME]\n"
+            "       cloude-task-set-state <task-file> --dod-state NAME "
+            "[--reason TEXT]\n"
         )
         return 30
-    if new_todo is None and new_tag is None:
-        sys.stderr.write(
-            "cloude-task-set-state: nothing to do — pass --todo and/or --tag\n"
+
+    # --dod-state is mutually exclusive with --todo / --tag / --via —
+    # they rewrite different headings and pairing them would be
+    # ambiguous.
+    if new_dod is not None and any(x is not None for x in (new_todo, new_tag, new_via)):
+        return _bail(
+            "--dod-state cannot be combined with --todo / --tag / --via"
         )
-        return 30
+    if new_dod is None and dod_reason is not None:
+        return _bail("--reason requires --dod-state")
+    if new_via is not None and new_todo is None:
+        return _bail("--via requires --todo")
+    if new_todo is None and new_tag is None and new_dod is None:
+        return _bail("nothing to do — pass --todo, --tag, or --dod-state")
+
     if new_todo is not None and new_todo not in TODO_KEYWORDS:
-        sys.stderr.write(
-            f"cloude-task-set-state: unknown TODO keyword: {new_todo}\n"
-            f"  expected one of: {', '.join(TODO_KEYWORDS)}\n"
+        return _bail(
+            f"unknown TODO keyword: {new_todo}\n"
+            f"  expected one of: {', '.join(TODO_KEYWORDS)}"
         )
-        return 30
     if new_tag is not None and not re.fullmatch(r"[A-Za-z0-9_@]+", new_tag):
-        sys.stderr.write(
-            f"cloude-task-set-state: invalid tag: {new_tag!r} "
-            "(letters, digits, '_' and '@' only)\n"
+        return _bail(
+            f"invalid tag: {new_tag!r} (letters, digits, '_' and '@' only)"
         )
-        return 30
+    if new_dod is not None:
+        new_dod_uc = new_dod.upper()
+        if new_dod_uc not in DOD_KEYWORDS:
+            return _bail(
+                f"unknown DoD verdict: {new_dod}\n"
+                f"  expected one of: {', '.join(DOD_KEYWORDS)}"
+            )
+        new_dod = new_dod_uc
 
     path = Path(task_file)
     if not path.is_file():
@@ -140,6 +223,24 @@ def main(argv: list[str]) -> int:
         return 2
 
     content = path.read_text()
+
+    # --- Branch 1: --dod-state ------------------------------------------------
+    if new_dod is not None:
+        try:
+            new_content = set_dod_verdict(
+                content, new_verdict=new_dod, body=dod_reason
+            )
+        except DodConsistencyError as exc:
+            sys.stderr.write(f"cloude-task-set-state: {exc}\n")
+            return 31
+        except ValueError as exc:
+            sys.stderr.write(f"cloude-task-set-state: {exc}\n")
+            return 2
+        path.write_text(new_content)
+        print(f"DOD_VERDICT={shlex.quote(new_dod)}")
+        return 0
+
+    # --- Branch 2: --todo / --tag (the original heading flip) -----------------
     match = HEADING_RE.search(content)
     if not match:
         sys.stderr.write(
@@ -147,7 +248,8 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    todo = new_todo if new_todo is not None else match["todo"]
+    prev_todo = match["todo"]
+    todo = new_todo if new_todo is not None else prev_todo
     if new_tag is not None:
         tag_chain = f":{new_tag}:"
     else:
@@ -165,11 +267,49 @@ def main(argv: list[str]) -> int:
     line += match["nl"]
 
     content = content[: match.start()] + line + content[match.end() :]
+
+    # On a real TODO transition (the keyword actually changed), also
+    # append a fresh log-entry skeleton under ** Log so the per-stage
+    # audit trail tracks the change. A `--todo X` invocation where X
+    # equals the current keyword is treated as a no-op for the log
+    # (typically a tag-reset like `/iterate` on an already-ITERATING
+    # task). Best-effort: skeleton failure (e.g., missing ** Log
+    # section) warns to stderr but does not undo the heading flip.
+    if (
+        new_todo is not None
+        and new_todo != prev_todo
+        and find_log_section(content) is not None
+    ):
+        via_text = new_via if new_via is not None else _infer_via(prev_todo, new_todo)
+        try:
+            content = append_log_entry_skeleton(
+                content,
+                stage=new_todo,
+                via=via_text,
+                prev_stage=prev_todo,
+                when=now_ts(),
+            )
+        except ValueError as exc:
+            sys.stderr.write(
+                f"cloude-task-set-state: could not append log entry "
+                f"skeleton: {exc}\n"
+            )
+    elif (
+        new_todo is not None
+        and new_todo != prev_todo
+        and find_log_section(content) is None
+    ):
+        sys.stderr.write(
+            "cloude-task-set-state: task file is missing the ** Log "
+            "section — skeleton not appended. Add it by hand to enable "
+            "the per-stage log workflow.\n"
+        )
+
     path.write_text(content)
 
     # A `--todo` change into an in-flight stage is a stage transition —
     # this is the single chokepoint /advance and /iterate both pass
-    # through. Drop the DoD marker so the next `Stop` fires its reminder
+    # through. Drop the DoD marker so the next `Stop` fires its check
     # exactly once. Best-effort: a marker failure must never fail the
     # heading edit (which has already been written above).
     if new_todo in IN_FLIGHT:
