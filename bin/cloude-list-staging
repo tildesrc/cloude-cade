@@ -34,13 +34,13 @@
 #   HEADING=<exact idea heading text>
 #   MODE=<standard|adopt>
 #   PR_URL=<value of the idea's :ADOPT: property, or empty>
-#   COMPANION_TASK=<value of the idea's :COMPANION_TASK: property, or empty>
+#   COMPANION=<value of the idea's :COMPANION: property, or empty>
 #   SKIP_REVIEW=<project's :SKIP_REVIEW: property, or empty>
 #
 # SKIP_REVIEW carries the project heading's optional :SKIP_REVIEW:
 # property (`t` when the repo opts out of peer review). /promote
 # forwards it to cloude-promote-setup so it lands in the task file.
-# COMPANION_TASK carries the idea's optional :COMPANION_TASK: property
+# COMPANION carries the idea's optional :COMPANION: property
 # (sibling cloude task ID, slug-dated form); /promote forwards it the
 # same way.
 #
@@ -102,7 +102,7 @@ def _collect(root):
                     "skip_review": skip_review,
                     "title": str(idea.heading).strip(),
                     "adopt_pr": (idea_props.get("ADOPT") or "").strip(),
-                    "companion_task": (idea_props.get("COMPANION_TASK") or "").strip(),
+                    "companion": (idea_props.get("COMPANION") or "").strip(),
                 }
             )
     return records, todo_projects
@@ -171,7 +171,7 @@ def main(argv: list[str]) -> int:
         _emit("HEADING", match["title"])
         _emit("MODE", "adopt" if is_adopt else "standard")
         _emit("PR_URL", adopt_pr)
-        _emit("COMPANION_TASK", match["companion_task"])
+        _emit("COMPANION", match["companion"])
         _emit("SKIP_REVIEW", match["skip_review"])
         return 0
 

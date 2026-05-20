@@ -28,13 +28,13 @@ progresses; humans rarely hand-edit them.
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
 | `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION_TASK:` | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
+| `:COMPANION:`    | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,completed,dropped}/<id>.org`. |
 
 `:ID:` and `:REPO:` are set when the task is promoted from staging.
 The rest are filled in as the task progresses (branch + worktree at
 the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
 whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
-`:COMPANION_TASK:` are set by `/promote` when the situation applies
+`:COMPANION:` are set by `/promote` when the situation applies
 (see *Staging-idea trigger properties* below for what each one keys
 off of); they're omitted on ordinary tasks.
 
@@ -47,12 +47,12 @@ sub-heading's properties drawer (in addition to the project-level
 | Property            | Meaning                                                            |
 | ------------------- | ------------------------------------------------------------------ |
 | `:ADOPT:`           | *(optional)* URL of an existing open PR in the project's repo. Triggers ADOPT mode (`/promote` checks out the PR's branch as a worktree rather than opening a new draft PR). Without this property, the idea promotes as a standard task. Renders `:ADOPTED: t` into the new active task's properties drawer. |
-| `:COMPANION_TASK:`  | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION_TASK:` property. |
+| `:COMPANION:`       | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION:` property. |
 
 Both are detected by `bin/cloude-list-staging` (which emits `MODE` /
-`PR_URL` / `COMPANION_TASK` lines for the chosen idea) and forwarded by
+`PR_URL` / `COMPANION` lines for the chosen idea) and forwarded by
 `/promote` to `bin/cloude-promote-setup` via the matching `--mode` /
-`--pr-url` / `--companion-task` flags. The staging idea's heading text
+`--pr-url` / `--companion` flags. The staging idea's heading text
 and body are free-form in both modes — mode and pairing are determined
 entirely by property presence, never by heading-text pattern matching.
 
@@ -185,11 +185,11 @@ dependency, and runs on plain `python3`.
   trigger properties*); idea heading text is free-form and never
   pattern-matched. With `--select N`, instead emits the chosen
   idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
-  `COMPANION_TASK`, `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines,
+  `COMPANION`, `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines,
   so `/promote` can `eval` it rather than re-parsing staging.org.
   `MODE` is `adopt` iff the idea has `:ADOPT:` set; `PR_URL` carries
-  the `:ADOPT:` value in that case. `COMPANION_TASK` carries the
-  idea's `:COMPANION_TASK:` property (empty if absent). `SKIP_REVIEW`
+  the `:ADOPT:` value in that case. `COMPANION` carries the
+  idea's `:COMPANION:` property (empty if absent). `SKIP_REVIEW`
   carries the project heading's optional `:SKIP_REVIEW:` property.
   Used by `/promote` step 1.
 - **`cloude-list-active`** — Print active tasks under
@@ -202,7 +202,7 @@ dependency, and runs on plain `python3`.
 - **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
   lines for the heading TODO/tag/text, the properties drawer
   (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `SKIP_REVIEW` / `COMPANION_TASK` when present), and derived fields (`SLUG`,
+  `SKIP_REVIEW` / `COMPANION` when present), and derived fields (`SLUG`,
   `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
   `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
@@ -245,8 +245,8 @@ dependency, and runs on plain `python3`.
   window 0 (`agent`, selected by default) runs `bin/cloude-run`;
   window 1 (`task`) runs `bin/cloude-open-task-file` as a read-only
   live view of the task's `.org` file. Optional flags
-  `--skip-review` and `--companion-task <id>` render
-  `:SKIP_REVIEW: t` and `:COMPANION_TASK: <id>` respectively into
+  `--skip-review` and `--companion <id>` render
+  `:SKIP_REVIEW: t` and `:COMPANION: <id>` respectively into
   the new task file's properties drawer. Distinct non-zero exit
   codes per failure mode (10 clone, 11 worktree, 12 PR, 13 render,
   14 staging removal, 20 tmux collision, 30 arg validation) and a

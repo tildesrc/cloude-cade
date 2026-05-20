@@ -321,14 +321,14 @@ require review — that's the default.
 ```
 
 **Idea-level properties.** Each idea sub-heading may itself carry an
-optional properties drawer with `:ADOPT:` and/or `:COMPANION_TASK:`:
+optional properties drawer with `:ADOPT:` and/or `:COMPANION:`:
 
 - `:ADOPT: <PR url>` — promote this idea as an **ADOPT-mode** task:
   no new branch or PR is created; the existing PR's branch is checked
   out as a worktree and the task starts in `ITERATING :user:`. The
   heading text and body are free-form (used as the iteration prompt
   pre-fill, same as standard mode).
-- `:COMPANION_TASK: <task-id>` — this task is paired with a sibling
+- `:COMPANION: <task-id>` — this task is paired with a sibling
   cloude task (slug-dated ID, e.g. `2026-05-15-acme-service-new-endpoint`).
   The property is copied verbatim into the new active task file's
   properties drawer; see [`docs/internals.md`](docs/internals.md) for
@@ -350,7 +350,7 @@ pattern-matched to infer either — they're properties or nothing.
    :END:
 ** Wire the new endpoint into the dashboard
    :PROPERTIES:
-   :COMPANION_TASK: 2026-05-15-acme-service-new-endpoint
+   :COMPANION: 2026-05-15-acme-service-new-endpoint
    :END:
 ```
 

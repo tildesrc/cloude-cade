@@ -49,8 +49,8 @@ Common required args:
 Common optional args:
   --skip-review                  repo opts out of peer review; render
                                  :SKIP_REVIEW: t into the task file
-  --companion-task <id>          sibling cloude task ID (slug-dated form);
-                                 render :COMPANION_TASK: <id> into the
+  --companion <id>               sibling cloude task ID (slug-dated form);
+                                 render :COMPANION: <id> into the
                                  task file's properties drawer
 
 Common args (both modes):
@@ -82,7 +82,7 @@ BASE_REF=""
 PR_URL=""
 PR_NUMBER=""
 SKIP_REVIEW=""
-COMPANION_TASK=""
+COMPANION=""
 
 if [[ $# -eq 0 ]]; then
     usage >&2
@@ -103,7 +103,7 @@ while (($#)); do
         --pr-url)            PR_URL="$2"; shift 2 ;;
         --pr-number)         PR_NUMBER="$2"; shift 2 ;;
         --skip-review)       SKIP_REVIEW=1; shift ;;
-        --companion-task)    COMPANION_TASK="$2"; shift 2 ;;
+        --companion)         COMPANION="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         *) echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 30 ;;
     esac
@@ -294,24 +294,24 @@ if [[ -n "$SKIP_REVIEW" ]]; then
     SKIP_REVIEW_LINE="  :SKIP_REVIEW:  t"
 fi
 
-# --companion-task applies to both modes: render :COMPANION_TASK: <id>
+# --companion applies to both modes: render :COMPANION: <id>
 # into the new task file's properties drawer, same way :SKIP_REVIEW:
 # is handled.
-COMPANION_TASK_LINE=""
-if [[ -n "$COMPANION_TASK" ]]; then
-    COMPANION_TASK_LINE="  :COMPANION_TASK: $COMPANION_TASK"
+COMPANION_LINE=""
+if [[ -n "$COMPANION" ]]; then
+    COMPANION_LINE="  :COMPANION: $COMPANION"
 fi
 
 if ! python3 - <<'PY' \
         "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
         "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
-        "$SKIP_REVIEW_LINE" "$COMPANION_TASK_LINE" "$NOTES_PRELUDE"
+        "$SKIP_REVIEW_LINE" "$COMPANION_LINE" "$NOTES_PRELUDE"
 import re
 import sys
 from pathlib import Path
 
 (_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
- pr_url, adopted_line, skip_review_line, companion_task_line,
+ pr_url, adopted_line, skip_review_line, companion_line,
  notes_prelude) = sys.argv
 
 text = Path(tmpl).read_text()
@@ -369,13 +369,13 @@ if skip_review_line:
         flags=re.MULTILINE,
     )
 
-# 4c. --companion-task: insert :COMPANION_TASK: <id> just before :END:
+# 4c. --companion: insert :COMPANION: <id> just before :END:
 #     of the properties drawer. Absent by default — only added when
-#     the staging idea carried a :COMPANION_TASK: property.
-if companion_task_line:
+#     the staging idea carried a :COMPANION: property.
+if companion_line:
     text = re.sub(
         r"^(\s*:END:\s*)$",
-        companion_task_line + "\n" + r"\g<1>",
+        companion_line + "\n" + r"\g<1>",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -508,7 +508,7 @@ for j in range(start + 1, len(lines)):
 # Capture the entry's body (everything below the heading line, up to
 # the block end) before deleting it, so the prefill can include it.
 # Strip any :PROPERTIES: ... :END: drawer (now used to carry :ADOPT:
-# and :COMPANION_TASK: triggers — those don't belong in the prompt).
+# and :COMPANION: triggers — those don't belong in the prompt).
 # Dedent the org indentation and trim surrounding blank lines.
 if body_out is not None:
     body_lines = lines[start + 1:end]
@@ -630,6 +630,6 @@ if [[ -n "$SKIP_REVIEW" ]]; then
     echo "Peer review: skipped — :SKIP_REVIEW: t set; /advance skips the REVIEW stage (ITERATING → MERGING)."
 fi
 
-if [[ -n "$COMPANION_TASK" ]]; then
-    echo "Companion task: :COMPANION_TASK: $COMPANION_TASK rendered into the task file."
+if [[ -n "$COMPANION" ]]; then
+    echo "Companion task: :COMPANION: $COMPANION rendered into the task file."
 fi
