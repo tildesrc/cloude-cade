@@ -279,123 +279,37 @@ TASK_ID="$(basename "$TASK_FILE" .org)"
 if [[ "$MODE" == "standard" ]]; then
     NEW_TODO="PLANNING"
     NEW_HEADING="$HEADING"
-    ADOPTED_LINE=""
     NOTES_PRELUDE=""
 else
     NEW_TODO="ITERATING"
     NEW_HEADING="$HEADING"
-    ADOPTED_LINE="  :ADOPTED:  t"
     NOTES_PRELUDE="Adopted from PR $PR_URL"
 fi
 
-# --skip-review applies to both modes: the repo opts out of peer review.
-SKIP_REVIEW_LINE=""
-if [[ -n "$SKIP_REVIEW" ]]; then
-    SKIP_REVIEW_LINE="  :SKIP_REVIEW:  t"
-fi
-
-# --companion applies to both modes: render :COMPANION: <id>
-# into the new task file's properties drawer, same way :SKIP_REVIEW:
-# is handled.
-COMPANION_LINE=""
-if [[ -n "$COMPANION" ]]; then
-    COMPANION_LINE="  :COMPANION: $COMPANION"
-fi
-
-if ! python3 - <<'PY' \
-        "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
-        "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" "$ADOPTED_LINE" \
-        "$SKIP_REVIEW_LINE" "$COMPANION_LINE" "$NOTES_PRELUDE"
-import re
-import sys
+# Render TEMPLATE.org → $TASK_FILE via the shared
+# cloude_org.render_task_from_template helper. Booleans for adopted
+# and skip_review are passed as "1" / "" so the bool() coercion on
+# the Python side gives the right truthiness without arg munging.
+ADOPTED_FLAG=""; [[ "$MODE" == "adopt" ]] && ADOPTED_FLAG=1
+SKIP_REVIEW_FLAG=""; [[ -n "$SKIP_REVIEW" ]] && SKIP_REVIEW_FLAG=1
+if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
+import os, sys
 from pathlib import Path
-
-(_, tmpl, dest, todo, heading, task_id, repo_url, branch, worktree,
- pr_url, adopted_line, skip_review_line, companion_line,
- notes_prelude) = sys.argv
-
-text = Path(tmpl).read_text()
-
-# 1. Heading line: replace "* PLANNING <task title>" with the right TODO
-#    and heading; tag stays :user: in both modes.
-text = re.sub(
-    r"^\* PLANNING <task title>\s+:user:\s*$",
-    f"* {todo} {heading}                                                :user:",
-    text,
-    count=1,
-    flags=re.MULTILINE,
+sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
+from cloude_org import render_task_from_template
+(tmpl, dest, todo, heading, task_id, repo_url, branch, worktree, pr_url,
+ adopted_flag, skip_review_flag, companion, notes_prelude) = sys.argv[1:]
+out = render_task_from_template(
+    Path(tmpl).read_text(),
+    todo=todo, heading=heading, task_id=task_id, repo_url=repo_url,
+    branch=branch, worktree=worktree, pr_url=pr_url,
+    adopted=bool(adopted_flag), skip_review=bool(skip_review_flag),
+    companion=companion, notes_prelude=notes_prelude,
 )
-
-# 2. #+TITLE: <task title>
-text = text.replace("#+TITLE: <task title>", f"#+TITLE: {heading}", 1)
-
-# 3. Properties drawer values.
-text = re.sub(
-    r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:BRANCH:\s*)$", rf"\g<1>{branch}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:WORKTREE:\s*)$", rf"\g<1>{worktree}", text, count=1, flags=re.MULTILINE
-)
-text = re.sub(
-    r"^(\s*:PR:\s*)$", rf"\g<1>{pr_url}", text, count=1, flags=re.MULTILINE
-)
-
-# 4. ADOPT-only: insert :ADOPTED: t just before :END: of the properties
-#    drawer. The template doesn't include the property by default, so add.
-if adopted_line:
-    text = re.sub(
-        r"^(\s*:END:\s*)$",
-        adopted_line + "\n" + r"\g<1>",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-# 4b. --skip-review: insert :SKIP_REVIEW: t just before :END: of the
-#     properties drawer, same as :ADOPTED:. Absent by default — only
-#     added when the repo opts out of peer review.
-if skip_review_line:
-    text = re.sub(
-        r"^(\s*:END:\s*)$",
-        skip_review_line + "\n" + r"\g<1>",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-# 4c. --companion: insert :COMPANION: <id> just before :END:
-#     of the properties drawer. Absent by default — only added when
-#     the staging idea carried a :COMPANION: property.
-if companion_line:
-    text = re.sub(
-        r"^(\s*:END:\s*)$",
-        companion_line + "\n" + r"\g<1>",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-# 5. ADOPT-only: prepend a Notes-section line referencing the adopted PR.
-#    The template's "** Notes" section starts with prose body text; we
-#    insert our line above it so the user's later edits don't lose it.
-if notes_prelude:
-    text = re.sub(
-        r"^(\*\* Notes\s*)$",
-        r"\g<1>\n   " + notes_prelude.replace("\\", "\\\\"),
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-
-Path(dest).write_text(text)
-PY
-then
+Path(dest).write_text(out)
+' "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
+    "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" \
+    "$ADOPTED_FLAG" "$SKIP_REVIEW_FLAG" "$COMPANION" "$NOTES_PRELUDE"; then
     bail 13 "task-file render failed"
 fi
 record "Rendered task file $TASK_FILE"
@@ -405,49 +319,33 @@ record "Rendered task file $TASK_FILE"
 # pre-seeded DoD checkboxes from `cloude_org.STAGE_DOD`. The stage
 # matches NEW_TODO (PLANNING for standard mode, ITERATING for ADOPT).
 # Best-effort: a seeding failure warns but does not undo the render.
-#
-# Run through cloude-python rather than bare python3 so cloude_org
-# can grow third-party deps (orgparse, etc.) without breaking this
-# host-side import path. See bin/cloude-python for venv-resolution.
 
-if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" - <<'PY' "$TASK_FILE" "$NEW_TODO"
-import os
-import sys
+if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
+import os, sys
 from pathlib import Path
-
 sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
 from cloude_org import append_log_entry_skeleton, find_log_section, now_ts
-
-task_file = sys.argv[1]
-new_todo = sys.argv[2]
-
+task_file, new_todo = sys.argv[1], sys.argv[2]
 path = Path(task_file)
 content = path.read_text()
 if find_log_section(content) is None:
     sys.stderr.write(
-        f"cloude-promote-setup: task file has no ** Log section; "
-        f"initial log entry not seeded. Add the section to "
-        f"tasks/TEMPLATE.org to enable this.\n"
+        "cloude-promote-setup: task file has no ** Log section; "
+        "initial log entry not seeded. Add the section to "
+        "tasks/TEMPLATE.org to enable this.\n"
     )
     sys.exit(0)
-
 try:
     new_content = append_log_entry_skeleton(
-        content,
-        stage=new_todo,
-        via="/promote",
-        prev_stage="",
-        when=now_ts(),
+        content, stage=new_todo, via="/promote", prev_stage="", when=now_ts(),
     )
 except ValueError as exc:
     sys.stderr.write(
         f"cloude-promote-setup: could not seed initial log entry: {exc}\n"
     )
     sys.exit(0)
-
 path.write_text(new_content)
-PY
-then
+' "$TASK_FILE" "$NEW_TODO"; then
     : # already warned via stderr; do not fail the promote
 fi
 record "Seeded initial $NEW_TODO log entry"
@@ -465,76 +363,21 @@ fi
 # it.
 STAGING_BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-staging-body.XXXXXX")"
 
-if ! python3 - "$STAGING" "$STAGING_HEADING" "$STAGING_BODY_FILE" <<'PY'
-import sys
-import textwrap
+if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
+import os, sys
 from pathlib import Path
-
-path = Path(sys.argv[1])
-target = sys.argv[2].strip()
-# argv[3], when non-empty, is a file to capture the entry's body into.
-body_out = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
-lines = path.read_text().splitlines(keepends=True)
-
-# Find a sub-heading "** <target>" (any trailing tags allowed). Delete
-# from that line up to the next heading at level <= 2.
-def heading_level(line: str) -> int:
-    if not line.startswith("*"):
-        return 0
-    i = 0
-    while i < len(line) and line[i] == "*":
-        i += 1
-    return i if i < len(line) and line[i] == " " else 0
-
-start = -1
-for i, line in enumerate(lines):
-    if heading_level(line) == 2:
-        # Strip trailing tags/whitespace for comparison.
-        body = line[3:].rstrip()
-        # Tags look like ":foo:bar:" at the very end. Drop them.
-        if body.endswith(":") and " :" in body:
-            body = body[:body.rfind(" :")].rstrip()
-        if body == target:
-            start = i
-            break
-
-if start == -1:
+sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
+from cloude_org import remove_staging_entry
+staging, target, body_out = sys.argv[1], sys.argv[2].strip(), sys.argv[3]
+path = Path(staging)
+try:
+    new_content, body = remove_staging_entry(path.read_text(), target)
+except ValueError as exc:
     sys.exit(f"heading not found in {path}: {target!r}")
-
-# Walk forward to find the end: next heading at level <= 2, or EOF.
-end = len(lines)
-for j in range(start + 1, len(lines)):
-    lvl = heading_level(lines[j])
-    if 0 < lvl <= 2:
-        end = j
-        break
-
-# Capture the entry's body (everything below the heading line, up to
-# the block end) before deleting it, so the prefill can include it.
-# Strip any :PROPERTIES: ... :END: drawer (now used to carry :ADOPT:
-# and :COMPANION: triggers — those don't belong in the prompt).
-# Dedent the org indentation and trim surrounding blank lines.
-if body_out is not None:
-    body_lines = lines[start + 1:end]
-    in_drawer = False
-    kept = []
-    for line in body_lines:
-        stripped = line.strip()
-        if not in_drawer and stripped.upper() == ":PROPERTIES:":
-            in_drawer = True
-            continue
-        if in_drawer:
-            if stripped.upper() == ":END:":
-                in_drawer = False
-            continue
-        kept.append(line)
-    entry_body = textwrap.dedent("".join(kept)).strip("\n")
-    Path(body_out).write_text(entry_body)
-
-del lines[start:end]
-path.write_text("".join(lines))
-PY
-then
+if body_out:
+    Path(body_out).write_text(body)
+path.write_text(new_content)
+' "$STAGING" "$STAGING_HEADING" "$STAGING_BODY_FILE"; then
     bail 14 "removing staging entry failed"
 fi
 record "Removed staging entry"

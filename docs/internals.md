@@ -424,18 +424,21 @@ disk once and the hooks re-exec into its Python:
   scripts that read `__doc__` (currently just `cloude-task-set-state`
   for `--help`) rebind it with an explicit `__doc__ = """…"""`.
 
-`cloude-promote-setup` is a bash orchestrator with two inline
-`python3 - <<'PY'` heredocs. The template-renderer heredoc stays on
-`python3` (stdlib only); the log-entry-seeder heredoc — which
-imports `cloude_org` — runs through `cloude-python` so it picks up
-the same venv.
+`cloude-promote-setup` is a bash orchestrator whose orgmode-touching
+steps (render task file, seed initial log entry, remove staging
+entry) shell out to `cloude-python -c '...'` one-liners that call
+named helpers in `cloude_org.py`. No inline `python3 - <<'PY'`
+heredocs — the bash script is just process glue around git, `gh`,
+`tmux`, and the three Python helpers.
 
-`cloude_org.py` itself stays stdlib-only-by-convention for now —
-nothing forces it to import third-party packages, and the small,
-fixed grammar the heading + log-entry helpers operate on is well
-within reach of regexes. The launcher just means a future bump to
-add `orgparse` (or anything else) here is a one-line edit, not a
-shebang-and-image-rebuild project.
+`cloude_org.py` imports `orgparse` for its read-side parsers
+(`parse_heading`, `has_level2_section`, `remove_staging_entry`).
+Writers (`find_log_section`, `iter_log_entries`,
+`append_log_entry_skeleton`, `set_dod_verdict`,
+`mark_plan_approved`, `_stamp_exited_duration`) and the heading
+rewriter in `cloude-task-set-state` stay on regex: they all need
+byte/line ranges per node so they can splice replacements back into
+the file, and `orgparse` doesn't expose those ranges.
 
 The org-reading helper scripts (`cloude-dash`, `cloude-list-active`,
 `cloude-list-staging`, `cloude-task-info`) are off the hot path and
