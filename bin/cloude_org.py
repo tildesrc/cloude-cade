@@ -27,33 +27,36 @@ drop the marker on a transition, and `cloude-on-stop` consumes it to
 fire its Definition-of-Done check only once per transition / `/iterate`
 turn rather than on every turn.
 
-Why hand-rolled regex here, instead of `orgparse`?
+Read side uses `orgparse`; writers use regex.
 
-It is no longer a hard constraint. The hook scripts that import this
-module (`cloude-on-stop`, `cloude-on-user-prompt`,
-`cloude-on-user-question`, `cloude-on-plan-accepted`,
-`cloude-task-set-state`) are re-exec'd through `bin/cloude-python`
-via an sh/Python polyglot shebang, so they run under the shared
-cloude venv built from the repo-root `pyproject.toml` + `uv.lock`.
-`import orgparse` works here — adding it is a one-line edit to the
-manifest, no per-invocation `uv run` overhead. See
-`docs/internals.md` → "Why hot-path hooks don't use `uv run`" for
-the full launcher / lockfile story.
+The hook scripts that import this module (`cloude-on-stop`,
+`cloude-on-user-prompt`, `cloude-on-user-question`,
+`cloude-on-plan-accepted`, `cloude-task-set-state`) are re-exec'd
+through `bin/cloude-python` via an sh/Python polyglot shebang, so
+they run under the shared cloude venv built from the repo-root
+`pyproject.toml` + `uv.lock`. `import orgparse` is free here, and
+the read-only parsers (`parse_heading`, the staging-entry locator
+in `remove_staging_entry`, the `** Plan`-section probe used by
+`cloude-on-plan-accepted`) use it.
 
-We keep the regex-based implementation for now because the grammar
-it touches is tiny and fixed — a single heading line,
-`* <TODO> <text> :tag:chain:`, plus the log entry schema described
-above — and the log-entry editor in particular needs byte/line
-ranges per node that `orgparse` doesn't expose (it'd have to be
-hand-written either way). Future work can swap individual helpers
-(e.g. `parse_heading`) to `orgparse` without touching the rest.
+The log-entry editor (`find_log_section`, `iter_log_entries`,
+`mark_plan_approved`, `append_log_entry_skeleton`, `set_dod_verdict`,
+`_stamp_exited_duration`) and the heading rewriter in
+`cloude-task-set-state` stay on regex: they all need byte/line
+ranges per node so they can splice replacements back into the file,
+and `orgparse` doesn't expose those ranges. Template rendering in
+`render_task_from_template` is also regex — it substitutes
+placeholders in a known string template, not parsing org grammar.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import re
+import textwrap
 from pathlib import Path
+
+import orgparse
 
 # The who-has-the-ball tags, in priority order — see CLAUDE.md's
 # "Who-has-the-ball tag" section.
@@ -105,31 +108,50 @@ STAGE_DOD: dict[str, tuple[str, ...]] = {
 # as a derived constant so it can't drift from STAGE_DOD.
 PLAN_APPROVED_BULLET = STAGE_DOD["PLANNING"][1]
 
-# The first top-level heading of a task file: leading stars + space, a
-# non-space TODO keyword, optional heading text, an optional trailing
-# `:tag:chain:`, then the line end. The non-greedy `(.*?)` for the
-# heading text ensures a colon-word embedded in the title (e.g.
-# ":user:" appearing mid-title) is not mistaken for the trailing tag
-# chain — only the chain anchored at `\s*$` matches.
-_HEADING_RE = re.compile(
-    r"^\*\s+(\S+)\s+(.*?)\s*(?::([A-Za-z0-9_@:]+):)?\s*$",
-    re.M,
-)
+def _org_env(filename: str = "<cloude-task>") -> orgparse.OrgEnv:
+    """Return an `OrgEnv` preloaded with the cloude TODO keywords.
+
+    `orgparse` only recognizes TODO keywords it's been told about. A
+    well-formed task file has the `#+TODO:` directive at the top so
+    the parser self-bootstraps, but the unit tests feed bare-heading
+    fixtures (no directive) and the hook scripts get called against
+    files of varying completeness. Seeding the env with the keyword
+    list keeps `node.todo` reliable across both.
+    """
+    return orgparse.OrgEnv(
+        todos=list(STAGE_KEYWORDS[:4]),  # PLANNING / ITERATING / REVIEW / MERGING
+        dones=list(STAGE_KEYWORDS[4:]),  # COMPLETE / DROPPED
+        filename=filename,
+    )
+
+
+def _load_org(content: str) -> orgparse.node.OrgRootNode:
+    """`orgparse.loads(content)` with the cloude TODO sequence preloaded.
+
+    `filename` matters only because `OrgEnv.__init__` requires it to
+    match `loads(filename=...)`; we use a sentinel.
+    """
+    return orgparse.loads(content, env=_org_env(), filename="<cloude-task>")
 
 
 def parse_heading(content: str) -> tuple[str, list[str]] | None:
     """Find the first top-level heading; return (TODO keyword, [tag names]).
 
-    `content` is the full text of a task `.org` file. Tag names are
-    split from the trailing org-tag chain (`:foo:bar:`); the list is
-    empty when the heading carries no tags. Returns None when no
-    heading is found.
+    `content` is the full text of a task `.org` file. The tag list is
+    sorted alphabetically (`orgparse` exposes tags as an unordered
+    set; consumers — `ball_tag` and the hook scripts — only need
+    membership, so a stable order is enough). Returns None when no
+    top-level heading is found, or when the heading is missing a TODO
+    keyword (which a well-formed task file should never be).
     """
-    m = _HEADING_RE.search(content)
-    if not m:
-        return None
-    tag_chain = m.group(3) or ""
-    return m.group(1), [t for t in tag_chain.split(":") if t]
+    root = _load_org(content)
+    for node in root[1:]:
+        if node.level == 1:
+            todo = (node.todo or "").strip()
+            if not todo:
+                return None
+            return todo, sorted(node.tags)
+    return None
 
 
 def ball_tag(tags: list[str]) -> str:
@@ -140,6 +162,154 @@ def ball_tag(tags: list[str]) -> str:
     wins.
     """
     return next((t for t in BALL_TAGS if t in tags), "")
+
+
+def has_level2_section(content: str, name: str) -> bool:
+    """True when `content` has a level-2 heading whose text starts with `name`.
+
+    Used by `cloude-on-plan-accepted` to decide between inserting and
+    replacing a `** Plan` section without resorting to a regex probe.
+    """
+    root = _load_org(content)
+    for node in root[1:]:
+        if node.level == 2 and str(node.heading).strip().startswith(name):
+            return True
+    return False
+
+
+def remove_staging_entry(content: str, heading_text: str) -> tuple[str, str]:
+    """Remove a level-2 sub-heading + body from `staging.org` content.
+
+    `heading_text` is matched against the heading text *without* tags
+    (`orgparse`'s `node.heading` strips the trailing `:tag:chain:`
+    for us). The returned tuple is `(new_content, body_text)`:
+
+    - `new_content`: `content` with the matching entry's heading line
+      and every line after it through the line just before the next
+      level-≤2 heading (or end of file) removed.
+    - `body_text`: the entry's body with its `:PROPERTIES:` drawer
+      stripped (`get_body()` does this for us), dedented, and
+      surrounding blank lines trimmed. Empty when the entry has only
+      a heading. Suitable for stuffing into a prefill prompt.
+
+    Raises `ValueError` when no level-2 heading matches `heading_text`.
+    """
+    root = _load_org(content)
+    nodes = list(root[1:])
+    target_idx: int | None = None
+    for i, node in enumerate(nodes):
+        if node.level == 2 and str(node.heading).strip() == heading_text.strip():
+            target_idx = i
+            break
+    if target_idx is None:
+        raise ValueError(f"heading not found: {heading_text!r}")
+
+    target = nodes[target_idx]
+    start_lineno = target.linenumber  # 1-based, points at the `** ...` line
+
+    end_lineno: int | None = None
+    for node in nodes[target_idx + 1:]:
+        if node.level <= 2:
+            end_lineno = node.linenumber  # 1-based, points at the next heading
+            break
+
+    lines = content.splitlines(keepends=True)
+    if end_lineno is None:
+        end_lineno = len(lines) + 1
+
+    new_lines = lines[: start_lineno - 1] + lines[end_lineno - 1:]
+    new_content = "".join(new_lines)
+
+    raw_body = target.get_body() or ""
+    body_text = textwrap.dedent(raw_body).strip("\n")
+
+    return new_content, body_text
+
+
+def render_task_from_template(
+    template_text: str,
+    *,
+    todo: str,
+    heading: str,
+    task_id: str,
+    repo_url: str,
+    branch: str,
+    worktree: str,
+    pr_url: str = "",
+    adopted: bool = False,
+    skip_review: bool = False,
+    companion: str = "",
+    notes_prelude: str = "",
+) -> str:
+    """Return `template_text` with TEMPLATE.org placeholders filled in.
+
+    Regex substitution (not org parsing): the template is a known
+    string layout, and the placeholders are anchored to it.
+    `:ADOPTED:`, `:SKIP_REVIEW:`, and `:COMPANION:` are inserted just
+    before the properties drawer's `:END:` line when the corresponding
+    flag/value is set, matching the order the old inline heredoc in
+    `cloude-promote-setup` produced. `notes_prelude`, when set, is
+    inserted as the first body line under `** Notes`.
+    """
+    text = template_text
+
+    # 48 spaces of padding between heading and `:user:`; matches what
+    # the previous inline heredoc produced. Long headings push the tag
+    # past column 80; that's the existing behavior, preserved here.
+    text = re.sub(
+        r"^\* PLANNING <task title>\s+:user:\s*$",
+        f"* {todo} {heading}" + " " * 48 + ":user:",
+        text,
+        count=1,
+        flags=re.M,
+    )
+
+    text = text.replace("#+TITLE: <task title>", f"#+TITLE: {heading}", 1)
+
+    text = re.sub(
+        r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.M
+    )
+    text = re.sub(
+        r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.M
+    )
+    text = re.sub(
+        r"^(\s*:BRANCH:\s*)$", rf"\g<1>{branch}", text, count=1, flags=re.M
+    )
+    text = re.sub(
+        r"^(\s*:WORKTREE:\s*)$", rf"\g<1>{worktree}", text, count=1, flags=re.M
+    )
+    text = re.sub(
+        r"^(\s*:PR:\s*)$", rf"\g<1>{pr_url}", text, count=1, flags=re.M
+    )
+
+    # Optional drawer entries — inserted just before `:END:`, in the
+    # same order the previous heredoc produced.
+    inserts: list[str] = []
+    if adopted:
+        inserts.append("  :ADOPTED:  t")
+    if skip_review:
+        inserts.append("  :SKIP_REVIEW:  t")
+    if companion:
+        inserts.append(f"  :COMPANION: {companion}")
+    for line in inserts:
+        text = re.sub(
+            r"^(\s*:END:\s*)$",
+            line + "\n" + r"\g<1>",
+            text,
+            count=1,
+            flags=re.M,
+        )
+
+    if notes_prelude:
+        text = re.sub(
+            r"^(\*\* Notes\s*)$",
+            r"\g<1>\n   " + notes_prelude.replace("\\", "\\\\"),
+            text,
+            count=1,
+            flags=re.M,
+        )
+
+    return text
 
 
 def dod_marker_path(task_file: str | Path) -> Path:

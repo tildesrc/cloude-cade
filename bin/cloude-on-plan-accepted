@@ -39,12 +39,16 @@ import re
 import sys
 from pathlib import Path
 
-# `dod_marker_path` is shared with cloude-task-set-state and
-# cloude-on-stop. cloude_org.py lives next to us in bin/ and is
-# imported under the shared venv that bin/cloude-python resolves
-# via the polyglot shebang above (see docs/internals.md).
+# Shared helpers from cloude_org.py. The polyglot shebang re-execs
+# us under bin/cloude-python's venv, so `import orgparse` (used by
+# parse_heading / has_level2_section) is available.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloude_org import dod_marker_path, mark_plan_approved  # noqa: E402
+from cloude_org import (  # noqa: E402
+    dod_marker_path,
+    has_level2_section,
+    mark_plan_approved,
+    parse_heading,
+)
 
 
 def main() -> int:
@@ -56,8 +60,8 @@ def main() -> int:
 
     # Only act when the task is currently in PLANNING. Don't surprise-flip
     # mid-stage if the user invokes plan mode for an ad-hoc clarification.
-    heading_match = re.search(r"^\*\s+(\S+)", content, re.M)
-    if not heading_match or heading_match.group(1) != "PLANNING":
+    parsed = parse_heading(content)
+    if parsed is None or parsed[0] != "PLANNING":
         return 0
 
     plan = extract_plan_content()
@@ -138,8 +142,10 @@ def upsert_plan_section(content: str, plan: str) -> str:
     plan_block = "** Plan\n" + indented + "\n\n"
 
     # If a Plan section already exists, replace it (up to the next ** or
-    # Local Variables footer).
-    if re.search(r"^\*\* Plan\b", content, re.M):
+    # Local Variables footer). The existence probe uses orgparse; the
+    # replacement stays on regex because orgparse doesn't expose the
+    # byte/line range needed to splice a replacement back in.
+    if has_level2_section(content, "Plan"):
         return re.sub(
             r"^\*\* Plan\b.*?(?=^\*\* |^# Local Variables:|\Z)",
             plan_block,
