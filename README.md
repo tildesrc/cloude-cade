@@ -61,6 +61,13 @@ After `make login` exits, your Claude credentials live in the
 restart, so you won't need to log in again. Run `make help` for the
 rest of the targets (rebuild, clean, etc.).
 
+`make test` runs the pytest suite under `tests/` (which depends on
+`sync`, so a fresh checkout just needs `make test` to land on green).
+The suite covers `bin/cloude_org.py` plus the Python helper / hook
+scripts in `bin/` via a mix of in-process unit tests and subprocess
+tests; the bash helpers are out of scope. The same target runs on
+every pull request in [`.github/workflows/test.yml`](.github/workflows/test.yml).
+
 ### The workflow at a glance
 
 ```mermaid
