@@ -64,10 +64,17 @@ emit_if_slugless() {
 # this watcher.
 emit_if_slugless
 
-# Watch loop. close_write/modify covers both Emacs atomic-rename
-# saves and direct file rewrites from cloude-set-staging-slug.
-inotifywait -m -q -e close_write,modify,move_self --format '%e' "$STAGING" |
-    while read -r _event; do
+# Watch loop. We watch the parent directory (not the file directly)
+# because atomic-rename saves — both Emacs and our own
+# `cloude-set-staging-slug` (which uses os.replace) — swap the file's
+# inode. inotifywait on a file path follows the *original* inode and
+# would silently stop seeing events after the first save. Filtering
+# by filename inside the directory watch is the standard workaround.
+STAGING_DIR="$(dirname "$STAGING")"
+STAGING_FILE="$(basename "$STAGING")"
+inotifywait -m -q -e close_write,moved_to --format '%f' "$STAGING_DIR" |
+    while read -r filename; do
+        [ "$filename" = "$STAGING_FILE" ] || continue
         sleep 0.2  # coalesce burst events from a single editor save
         emit_if_slugless
     done
