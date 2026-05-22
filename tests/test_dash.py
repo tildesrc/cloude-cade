@@ -266,3 +266,38 @@ class TestFlatten:
         # ACTIVE, STAGING, RECENT each get a header + EMPTY row.
         headers = [v for kind, v in rows if kind == dash.ROW_HEADER]
         assert headers == ["ACTIVE (0)", "STAGING (0)", "RECENT (0)"]
+
+
+class TestFinalizeOverrides:
+    """The exit-code → (prompt, flag) table the `f` key uses to walk
+    the override-able failures from `bin/cloude-finalize-cleanup`.
+
+    The contract this test locks in is twofold:
+
+    * Codes 12 / 13 / 14 each map to the matching `--force-worktree` /
+      `--skip-volume` / `--force-root` flag — the same overrides
+      `/finalize`'s skill walks the user through. If
+      cloude-finalize-cleanup's exit-code table changes, this test
+      should fail loudly so the dashboard mapping stays in sync.
+    * Code 10 (PR not MERGED) is intentionally absent — it's a hard
+      fail with no retry on the dashboard, same as in `/finalize`.
+    """
+
+    def test_maps_exit_codes_to_matching_flags(self, dash):
+        assert dash._FINALIZE_OVERRIDES[12][1] == "--force-worktree"
+        assert dash._FINALIZE_OVERRIDES[13][1] == "--skip-volume"
+        assert dash._FINALIZE_OVERRIDES[14][1] == "--force-root"
+
+    def test_does_not_cover_hard_fail_exit_codes(self, dash):
+        # 10 (PR not MERGED) and 11 (non-terminal, --force-drop not
+        # given) must never appear here — both are non-retryable from
+        # the dashboard side.
+        assert 10 not in dash._FINALIZE_OVERRIDES
+        assert 11 not in dash._FINALIZE_OVERRIDES
+
+    def test_prompts_are_y_n_questions(self, dash):
+        # The prompts are read by `input()` and parsed against `y`/`yes`
+        # — keep them in the same shape so the user always knows what
+        # they're answering.
+        for code, (prompt, _flag) in dash._FINALIZE_OVERRIDES.items():
+            assert "[y/N]" in prompt, f"exit {code}: {prompt!r}"

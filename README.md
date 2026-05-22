@@ -139,7 +139,7 @@ stage, each tagged with who currently has the ball — `:agent:`,
 labelled with the repo it belongs to:
 
 ```text
-cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  P promote  r reload  q quit
+cloude tasks      ↑/↓ move  p PR  t tmux  c copy slug  P promote  f finalize  r reload  q quit
 
 ACTIVE (4)
   MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
@@ -181,7 +181,7 @@ on the next reload; press `t` on it to attach to the new task's tmux
 session.
 
 ```sh
-bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
+bin/cloude-dash    # /: search · p: PR · t: switch to task · c: copy slug · f: finalize · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
@@ -451,13 +451,26 @@ the highlighted ACTIVE/RECENT task's slug to the clipboard, `P`
 promotes the highlighted STAGING idea via `bin/cloude-promote` (curses
 suspends for the run; press Enter to return), `r` reloads, `q` quits.
 
+Press `f` on a highlighted ACTIVE row to finalize the task via
+`bin/cloude-finalize-cleanup` — the same chain `/finalize` uses. For
+a task already in `COMPLETE` or `DROPPED` the cleanup runs straight
+away (verify-or-close the PR, kill the tmux session, remove the
+worktree and DinD volume, delete the local branch on COMPLETE, move
+the task file out of `tasks/active/`). For a task still in a
+non-terminal state, the dashboard first asks `Force-drop and
+finalize? [y/N]`; on `y` it reruns the cleanup with `--force-drop`.
+The override-able exit codes (dirty worktree, in-use DinD volume,
+root-owned files) get a y/N prompt and a retry with the matching
+flag, exactly as `/finalize` walks them. Press Enter to return to
+the dashboard when the run finishes.
+
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title
 contains the query (case-insensitive substring), and surviving section
 headers show `(matched/total)` so you can see what's been filtered out.
 `↑`/`↓` still navigate the filtered list while typing. `Esc` clears
 the query and exits search mode; `Enter` locks the filter, restoring
-the normal keymap (`j`/`k`/`p`/`t`/`c`/`P`/`g`/`G`/`r`) over the
+the normal keymap (`j`/`k`/`p`/`t`/`c`/`P`/`f`/`g`/`G`/`r`) over the
 filtered set — `Esc` while locked clears the filter, and `/` from a
 locked filter starts a fresh query.
 
