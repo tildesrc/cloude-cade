@@ -1,0 +1,73 @@
+#!/bin/bash
+# Host-side staging-slug watcher.
+#
+# Long-running monitor: emits exactly one stdout line
+# (STAGING_HAS_SLUGLESS_IDEAS) every time tasks/staging.org changes
+# in a way that leaves at least one idea sub-heading lacking a
+# `:SLUG:` property. The host claude session arms this via Monitor
+# under `/suggest-slugs-watch`; each emitted line lands as a fresh
+# turn in the chat, and `/suggest-slugs` writes the generated slugs
+# back via bin/cloude-set-staging-slug.
+#
+# Singleton via non-blocking flock — if another host session already
+# holds /tmp/cloude-watch-staging-slugs.lock, this process exits 0
+# immediately. No retry, no standby. After the lock-holder session
+# ends, recovery is one of: open a fresh host session (its
+# SessionStart hook re-arms) or run `/suggest-slugs-watch` in any
+# still-open session.
+#
+# Env knobs:
+#   CLOUDE_NO_SLUG_WATCH  non-empty → exit 0 immediately, no watching.
+
+set -euo pipefail
+
+if [ -n "${CLOUDE_NO_SLUG_WATCH:-}" ]; then
+    echo "cloude-watch-staging-slugs: CLOUDE_NO_SLUG_WATCH set; exiting." >&2
+    exit 0
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLOUDE_ROOT="${CLOUDE_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
+STAGING="$CLOUDE_ROOT/tasks/staging.org"
+LIST_STAGING="$CLOUDE_ROOT/bin/cloude-list-staging"
+LOCKFILE="${CLOUDE_SLUG_WATCH_LOCK:-/tmp/cloude-watch-staging-slugs.lock}"
+
+if [ ! -f "$STAGING" ]; then
+    echo "cloude-watch-staging-slugs: no staging file at $STAGING; exiting." >&2
+    exit 0
+fi
+
+if ! command -v inotifywait >/dev/null 2>&1; then
+    echo "cloude-watch-staging-slugs: inotifywait is required (apt install inotify-tools)." >&2
+    exit 1
+fi
+
+# Acquire the singleton lock non-blockingly. If another session has
+# it, abandon — no retry, no standby (see Architecture → Handover).
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo "cloude-watch-staging-slugs: another session holds $LOCKFILE; exiting." >&2
+    exit 0
+fi
+
+emit_if_slugless() {
+    # Print exactly one notification line when staging has any idea
+    # without a `:SLUG:`. The handler ignores anything else, so we
+    # don't enumerate the slugless ideas here — `/suggest-slugs`
+    # re-runs `--slugless` to get the fresh list.
+    if "$LIST_STAGING" --slugless 2>/dev/null | grep -q .; then
+        echo "STAGING_HAS_SLUGLESS_IDEAS"
+    fi
+}
+
+# Initial check at arm-time — pick up slugless ideas that pre-date
+# this watcher.
+emit_if_slugless
+
+# Watch loop. close_write/modify covers both Emacs atomic-rename
+# saves and direct file rewrites from cloude-set-staging-slug.
+inotifywait -m -q -e close_write,modify,move_self --format '%e' "$STAGING" |
+    while read -r _event; do
+        sleep 0.2  # coalesce burst events from a single editor save
+        emit_if_slugless
+    done

@@ -1,0 +1,40 @@
+#!/bin/bash
+# Host-side SessionStart hook for cloude.
+#
+# Emits JSON on stdout for Claude Code's SessionStart hook protocol —
+# specifically a `hookSpecificOutput.additionalContext` string that
+# nudges the host claude session to arm the staging-slug watcher
+# (`/suggest-slugs-watch`) on its first turn.
+#
+# Arming via Claude rather than directly spawning the watcher here is
+# deliberate: the watcher is a `Monitor`-armed background process,
+# and `Monitor` is a Claude tool — it has to be called from inside the
+# session so its event lines fire back into that session's chat.
+# This hook just primes the model with the instruction.
+#
+# Idempotent: the watcher uses a non-blocking flock, so re-arming
+# across many host sessions costs at most one short-lived process
+# per session that exits when it can't take the lock.
+#
+# Env knobs:
+#   CLOUDE_NO_SLUG_WATCH  non-empty → emit no instruction (opt-out
+#                         for users who don't want the watcher).
+#
+# The hook also exits 0 unconditionally; failing the SessionStart
+# hook would prevent the session from starting, which is wildly
+# inappropriate for an optional convenience.
+
+set -eu
+
+if [ -n "${CLOUDE_NO_SLUG_WATCH:-}" ]; then
+    exit 0
+fi
+
+cat <<'JSON'
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "[cloude] Staging-slug watcher: on your first turn in this session, call the `/suggest-slugs-watch` slash command to arm the background watcher that suggests `:SLUG:` properties for new `tasks/staging.org` ideas. The watcher uses a non-blocking flock so re-arming is safe across concurrent host sessions — only one session is the active watcher at a time, and losing the race is a silent no-op. (Set `CLOUDE_NO_SLUG_WATCH=1` in the environment to opt out.)"
+  }
+}
+JSON

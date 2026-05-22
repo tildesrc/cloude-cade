@@ -40,7 +40,7 @@ off of); they're omitted on ordinary tasks.
 
 ## Staging-idea trigger properties
 
-`/promote` reads two optional properties from each staging idea
+`/promote` reads three optional properties from each staging idea
 sub-heading's properties drawer (in addition to the project-level
 `:REPO:` and `:SKIP_REVIEW:`):
 
@@ -48,13 +48,17 @@ sub-heading's properties drawer (in addition to the project-level
 | ------------------- | ------------------------------------------------------------------ |
 | `:ADOPT:`           | *(optional)* URL of an existing open PR in the project's repo. Triggers ADOPT mode (`/promote` checks out the PR's branch as a worktree rather than opening a new draft PR). Without this property, the idea promotes as a standard task. Renders `:ADOPTED: t` into the new active task's properties drawer. |
 | `:COMPANION:`       | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION:` property. |
+| `:SLUG:`            | *(optional)* Filesystem slug for `/promote` to use when promoting this idea, in place of its mechanical kebab derivation from the heading. Normally written by the staging-slug watcher (`bin/cloude-watch-staging-slugs` → `/suggest-slugs` → `bin/cloude-set-staging-slug`); see the "Helper scripts" section below. An empty `:SLUG:` (no value) is the explicit "please suggest one" sentinel — `cloude-list-staging --slugless` treats it as missing, and `bin/cloude-set-staging-slug` replaces it. A non-empty user-set value is preserved (clobber-rejected). |
 
-Both are detected by `bin/cloude-list-staging` (which emits `MODE` /
-`PR_URL` / `COMPANION` lines for the chosen idea) and forwarded by
-`/promote` to `bin/cloude-promote-setup` via the matching `--mode` /
-`--pr-url` / `--companion` flags. The staging idea's heading text
-and body are free-form in both modes — mode and pairing are determined
-entirely by property presence, never by heading-text pattern matching.
+All three are detected by `bin/cloude-list-staging` (which emits
+`MODE` / `PR_URL` / `COMPANION` / `SLUG` lines for the chosen idea).
+`:ADOPT:` and `:COMPANION:` are forwarded by `/promote` to
+`bin/cloude-promote-setup` via the matching `--mode` / `--pr-url` /
+`--companion` flags; `:SLUG:` is consumed in step 3 of the
+slash-command flow as the proposed slug (still subject to user
+confirmation). The staging idea's heading text and body are
+free-form — mode, pairing, and the slug are determined entirely by
+property presence, never by heading-text pattern matching.
 
 ## Per-stage log entry: schema and hook check
 
@@ -145,6 +149,17 @@ cold-start reasoning behind the split. The exposed surface:
 - `STAGE_DOD: dict[str, tuple[str, ...]]` — per-stage DoD bullets,
   consumed by the skeleton generator and the hook. CLAUDE.md's
   *Stage details* sections mirror these as the human-facing copy.
+- `set_idea_slug(content, heading_text, slug)` — write a `:SLUG:`
+  property into the level-2 idea heading matching `heading_text` in
+  `tasks/staging.org`. Inserts a new properties drawer if none
+  exists, otherwise inserts the `:SLUG:` line before the drawer's
+  `:END:` (preserving drawer indent). Raises `SlugClobberError`
+  when an existing non-empty `:SLUG:` doesn't match (user-set slugs
+  win); an empty `:SLUG:` is the "please suggest" sentinel and gets
+  replaced. Backs `bin/cloude-set-staging-slug`.
+- `SLUG_RE` / `SLUG_MAX_LEN` / `SlugClobberError` — validation
+  pattern and exception used by `set_idea_slug` and
+  `cloude-set-staging-slug`.
 
 ### Lifecycle
 
@@ -188,13 +203,47 @@ dependency, and runs on plain `python3`.
   trigger properties*); idea heading text is free-form and never
   pattern-matched. With `--select N`, instead emits the chosen
   idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
-  `COMPANION`, `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines,
-  so `/promote` can `eval` it rather than re-parsing staging.org.
-  `MODE` is `adopt` iff the idea has `:ADOPT:` set; `PR_URL` carries
-  the `:ADOPT:` value in that case. `COMPANION` carries the
-  idea's `:COMPANION:` property (empty if absent). `SKIP_REVIEW`
-  carries the project heading's optional `:SKIP_REVIEW:` property.
-  Used by `/promote` step 1.
+  `COMPANION`, `SKIP_REVIEW`, `SLUG`) as shell-safe `KEY=VALUE`
+  lines, so `/promote` can `eval` it rather than re-parsing
+  staging.org. `MODE` is `adopt` iff the idea has `:ADOPT:` set;
+  `PR_URL` carries the `:ADOPT:` value in that case. `COMPANION`
+  carries the idea's `:COMPANION:` property (empty if absent).
+  `SKIP_REVIEW` carries the project heading's optional
+  `:SKIP_REVIEW:` property. `SLUG` carries the idea's `:SLUG:`
+  property (empty if absent — `/promote` falls back to the
+  mechanical kebab derivation). With `--slugless`, emits a
+  tab-separated `<project>\t<heading>` line per idea whose `:SLUG:`
+  is missing or empty (the "needs a suggestion" set); empty
+  output means there's nothing to do. Used by `/promote` step 1
+  (default + `--select`) and by `bin/cloude-watch-staging-slugs` /
+  `/suggest-slugs` (`--slugless`).
+- **`cloude-set-staging-slug <heading-text> <slug>`** — Write a
+  `:SLUG:` property into the staging.org idea sub-heading whose text
+  matches `<heading-text>`. Inserts a fresh properties drawer if the
+  idea has none, otherwise inserts the `:SLUG:` line just before the
+  drawer's `:END:`. Refuses to overwrite an existing non-empty
+  `:SLUG:` (exit 3 — user-set slugs win over the LLM-generated
+  ones); an *empty* `:SLUG:` is treated as the explicit "please
+  suggest" sentinel and gets replaced. Validates `<slug>` against
+  `SLUG_RE` (exit 30 on malformed). Called by `/suggest-slugs` once
+  per heading returned by `cloude-list-staging --slugless`.
+- **`cloude-watch-staging-slugs`** — Long-running watcher: emits
+  `STAGING_HAS_SLUGLESS_IDEAS` on stdout each time
+  `tasks/staging.org` ends up with an idea lacking a `:SLUG:`. The
+  host-side `Monitor` armed by `/suggest-slugs-watch` consumes those
+  lines as notification turns that route to `/suggest-slugs`.
+  Singleton via non-blocking `flock -n` on
+  `/tmp/cloude-watch-staging-slugs.lock` — exactly one watcher
+  runs across concurrent host sessions; losers exit immediately
+  (no standby, no retry). Honors `CLOUDE_NO_SLUG_WATCH=1`.
+  Requires `inotifywait` (Debian/Ubuntu: `apt install inotify-tools`).
+- **`cloude-on-host-session-start`** — Host-side `SessionStart` hook
+  (registered in `.claude/settings.json`). Emits a
+  `hookSpecificOutput.additionalContext` JSON that tells claude to
+  call `/suggest-slugs-watch` early in the session — the auto-arm
+  step for the staging-slug watcher. Always exits 0; never blocks
+  session start. Honors `CLOUDE_NO_SLUG_WATCH=1` by emitting no
+  additionalContext.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -391,6 +440,23 @@ heading parsing, the DoD-marker path helper, the per-stage `STAGE_DOD`
 bullets, and the `** Log` entry helpers (`iter_log_entries`,
 `latest_log_entry`, `append_log_entry_skeleton`, `set_dod_verdict`,
 `find_log_section`) through `bin/cloude_org.py`.
+
+### Host-side hooks (`.claude/settings.json`)
+
+A separate `.claude/settings.json` at the cloude repo root configures
+hooks for *host* claude sessions (the ones running in the cloude
+repo, not inside a per-task container). These do not affect the
+in-container settings file above; they're loaded independently by
+Claude Code based on the cwd.
+
+- **`SessionStart` → `bin/cloude-on-host-session-start`.** Fires when
+  a host claude session opens against the cloude repo. Emits JSON
+  with `hookSpecificOutput.additionalContext` instructing claude to
+  call `/suggest-slugs-watch` early in the session — that arms the
+  staging-slug watcher (`bin/cloude-watch-staging-slugs`) via a
+  persistent `Monitor`. Idempotent across concurrent sessions thanks
+  to the watcher's `flock -n`. `CLOUDE_NO_SLUG_WATCH=1` makes this
+  emit nothing.
 
 ### Why hot-path hooks don't use `uv run`
 

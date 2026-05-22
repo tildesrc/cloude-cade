@@ -56,6 +56,7 @@ bin/cloude-list-staging --select <N>
 - `PR_URL` — the value of the idea's `:ADOPT:` property in ADOPT mode, empty otherwise.
 - `COMPANION` — the value of the idea's optional `:COMPANION:` property (sibling cloude task ID), empty if absent. See step 4.
 - `SKIP_REVIEW` — the project's optional `:SKIP_REVIEW:` property (`t` when the repo opts out of peer review, empty otherwise; see step 4).
+- `SLUG` — the idea's optional `:SLUG:` property (pre-computed by the host-side staging-slug watcher — see [`/suggest-slugs-watch`](suggest-slugs-watch.md) / [`/suggest-slugs`](suggest-slugs.md)). Empty when no suggestion exists; step 3 falls back to the mechanical derivation in that case.
 
 If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 
@@ -87,9 +88,11 @@ gh repo view <owner>/<repo> --json defaultBranchRef -q .defaultBranchRef.name
 
 ## 3. Confirm the slug
 
-Derive from the idea heading in both modes: lowercase, replace non-alphanumerics with `-`, collapse repeats, trim. E.g. `"Hook to auto-move COMPLETE files"` → `hook-to-auto-move-complete-files`. (In ADOPT mode, the worktree's local branch still uses the verbatim `<head-ref-name>` so pushes go to the right upstream — only the task slug / filename / tmux session / DinD volume names follow the heading.)
+If `SLUG` from step 1's `--select` output is non-empty, use it verbatim as the proposed slug — that's the host claude's pre-computed suggestion (see `/suggest-slugs`), and it's likely shorter and clearer than the mechanical fallback below.
 
-Show the proposed slug to the user and ask them to confirm or override. Compute the task file path: `<cloude-root>/tasks/active/$(date +%F)-<slug>.org`.
+Otherwise, derive from the idea heading in both modes: lowercase, replace non-alphanumerics with `-`, collapse repeats, trim. E.g. `"Hook to auto-move COMPLETE files"` → `hook-to-auto-move-complete-files`. (In ADOPT mode, the worktree's local branch still uses the verbatim `<head-ref-name>` so pushes go to the right upstream — only the task slug / filename / tmux session / DinD volume names follow the heading.)
+
+Show the proposed slug to the user and ask them to confirm or override (regardless of which source it came from). Compute the task file path: `<cloude-root>/tasks/active/$(date +%F)-<slug>.org`.
 
 ## 4. Run the setup
 

@@ -2,10 +2,13 @@
 repos/
 worktrees/
 
-# Track project-scoped slash commands (overrides global ignore of .claude/)
+# Track project-scoped slash commands and the host-side hook config
+# (overrides global ignore of .claude/). settings.local.json and
+# anything else under .claude/ stays ignored — those are per-user.
 !.claude/
 .claude/*
 !.claude/commands/
+!.claude/settings.json
 
 # Emacs
 *~
