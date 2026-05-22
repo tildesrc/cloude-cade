@@ -206,10 +206,15 @@ remove_worktree() {
 # Count files under $WORKTREE not owned by the running user. Suppresses
 # the noisy "Permission denied" find prints because the host user may
 # legitimately be unable to descend into root-owned dirs — for our
-# purposes, the dir entry itself is already evidence enough.
+# purposes, the dir entry itself is already evidence enough. find then
+# exits nonzero on those denied descents; under this script's
+# 'set -euo pipefail' that would propagate through the pipe and abort
+# the calling 'foreign="$(foreign_owned_count)"' command substitution
+# before --force-root could even be consulted. '|| true' swallows
+# find's exit so wc -l still reports the rows it printed.
 foreign_owned_count() {
     [[ -d "$WORKTREE" ]] || { echo 0; return; }
-    find "$WORKTREE" -not -user "$(id -un)" 2>/dev/null | wc -l
+    { find "$WORKTREE" -not -user "$(id -un)" 2>/dev/null || true; } | wc -l
 }
 
 # Docker-as-root rm of the worktree directory. Mounts the parent dir
