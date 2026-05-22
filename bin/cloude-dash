@@ -422,6 +422,26 @@ _PROMOTE_EXIT_MESSAGES = {
 }
 
 
+# Exit codes from bin/cloude-finalize-cleanup that signal a judgment
+# call: the script bailed before the side effect, and rerunning with
+# the matching override flag retries it. Maps {exit_code: (prompt,
+# override_flag)}; the prompts mirror what /finalize's skill asks.
+_FINALIZE_OVERRIDES: dict[int, tuple[str, str]] = {
+    12: (
+        "Worktree is dirty / locked. Force-remove (discards changes)? [y/N] ",
+        "--force-worktree",
+    ),
+    13: (
+        "DinD volume is still in use. Skip volume cleanup? [y/N] ",
+        "--skip-volume",
+    ),
+    14: (
+        "Worktree has foreign-owned files. Nuke via 'docker run --user root'? [y/N] ",
+        "--force-root",
+    ),
+}
+
+
 def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     """Promote the highlighted STAGING row via `bin/cloude-promote`.
 
@@ -475,6 +495,97 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     return f"promote failed: {msg}"
 
 
+def _confirm_yes(prompt: str) -> bool:
+    """Read a line from stdin and treat only `y`/`yes` (case-insensitive)
+    as confirmation. EOF (Ctrl-D, closed stdin) counts as no."""
+    try:
+        return input(prompt).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def _finalize_task(stdscr, t: Task) -> str:
+    """Finalize the highlighted ACTIVE task via `bin/cloude-finalize-cleanup`.
+
+    Mirrors `_promote_staging`'s suspend-curses-and-shell-out pattern.
+    Two extras on top of it:
+
+    * Non-terminal task → ask the user to force-drop before running.
+      On no, abort with no side effect; on yes, seed the flag list
+      with `--force-drop`.
+    * Override-able exit codes (12 / 13 / 14) → prompt y/N and rerun
+      with the matching flag from `_FINALIZE_OVERRIDES`, accumulating
+      flags across passes until success, a non-override exit code,
+      or a no-answer.
+
+    Returns the status-line message describing the outcome."""
+    if t.section != ACTIVE:
+        return "(f: only works on ACTIVE rows)"
+
+    script = Path(__file__).resolve().parent / "cloude-finalize-cleanup"
+    if not script.exists():
+        return f"(f: {script} not found)"
+
+    is_terminal = t.state in TERMINAL_STATES
+    flags: list[str] = []
+
+    curses.endwin()
+    try:
+        if not is_terminal:
+            # Force-drop confirmation. Show the prompt on the bare
+            # terminal (curses is already suspended) so the user can
+            # decide before any side effect runs.
+            print(
+                f"Task '{t.title}' is in {t.state or 'no'} state "
+                f"(not COMPLETE / DROPPED)."
+            )
+            if not _confirm_yes("Force-drop and finalize? [y/N] "):
+                return "finalize aborted"
+            flags.append("--force-drop")
+
+        result_code = 0
+        while True:
+            result = subprocess.run([str(script), str(t.path), *flags])
+            result_code = result.returncode
+            if result_code == 0:
+                print("\nFinalize succeeded. Press Enter to return to the dashboard.")
+                break
+            if result_code in _FINALIZE_OVERRIDES:
+                prompt, override = _FINALIZE_OVERRIDES[result_code]
+                if _confirm_yes("\n" + prompt):
+                    if override not in flags:
+                        flags.append(override)
+                    continue
+                print("\nFinalize aborted. Press Enter to return to the dashboard.")
+                break
+            if result_code == 10:
+                print(
+                    "\nPR is not in state MERGED — the in-container agent set "
+                    "COMPLETE prematurely.\nFix in the task file: flip the "
+                    "TODO back to MERGING and let the merge land before "
+                    "re-running.\nPress Enter to return to the dashboard."
+                )
+                break
+            print(
+                f"\nFinalize failed (exit {result_code}). "
+                "Press Enter to return to the dashboard."
+            )
+            break
+
+        try:
+            input()
+        except EOFError:
+            pass
+    finally:
+        stdscr.clear()
+        stdscr.refresh()
+        curses.doupdate()
+
+    if result_code == 0:
+        return f"finalized: {t.title}"
+    return f"finalize failed: exit {result_code}"
+
+
 def _color(stdscr, tag: str) -> int:
     if not curses.has_colors():
         return 0
@@ -489,7 +600,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  P promote  r reload  q quit"
+    hint = "↑/↓ move  / search  p PR  t tmux  c copy slug  P promote  f finalize  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -803,6 +914,10 @@ def _run(stdscr) -> None:
                 # immediately even when watchers are absent.
                 if status.startswith("promoted: "):
                     rows, selected, _ = reload("reloaded")
+        elif ch == ord("f"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                status = _finalize_task(stdscr, t)
 
 
 def main() -> int:
