@@ -1,5 +1,7 @@
 # cloude
 
+[English](README.md) · [Español](README.es.md)
+
 Go from solo mode to YOLO mode.
 
 ## What this is for
