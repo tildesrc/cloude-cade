@@ -43,10 +43,11 @@
 # forwards it to cloude-promote-setup so it lands in the task file.
 # COMPANION carries the idea's optional :COMPANION: property
 # (sibling cloude task ID, slug-dated form); /promote forwards it the
-# same way. SLUG carries the idea's pre-suggested filesystem slug
-# from the staging-slug watcher (`bin/cloude-watch-staging-slugs` /
-# `/suggest-slugs`); empty when no suggestion exists yet, in which
-# case /promote falls back to the mechanical kebab derivation.
+# same way. SLUG carries the idea's optional :SLUG: property — when
+# set, cloude-promote uses it as the task slug instead of deriving
+# one from the heading. The slug is normally written by the
+# staging-slug watcher (`bin/cloude-watch-staging-slugs` /
+# `/suggest-slugs`) but can also be hand-edited on the idea drawer.
 #
 # With --slugless, prints one line per idea sub-heading whose
 # properties drawer has no `:SLUG:` (or has an empty `:SLUG:`),

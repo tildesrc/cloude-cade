@@ -17,6 +17,10 @@
   :SKIP_REVIEW: t
   :END:
 ** Third idea
+** Fourth idea with custom slug
+   :PROPERTIES:
+   :SLUG: hand-picked-slug
+   :END:
 
 * Personal todos
 ** TODO Buy groceries

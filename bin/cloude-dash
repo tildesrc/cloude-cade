@@ -413,6 +413,68 @@ def _switch_tmux(stdscr, t: Task) -> str:
     return f"detached from {session}"
 
 
+_PROMOTE_EXIT_MESSAGES = {
+    30: "argument error",
+    40: "staging lookup failed",
+    41: "slug is empty",
+    42: "gh call failed",
+    43: "ADOPT PR is not OPEN / cross-repo / repo mismatch",
+}
+
+
+def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
+    """Promote the highlighted STAGING row via `bin/cloude-promote`.
+
+    The staging-order in `staging` matches `cloude-list-staging`'s
+    numbering (both walk `tasks/staging.org`'s `root.children` and
+    skip projects without `:REPO:` in the same order), so the
+    1-based position is the `--select` index.
+
+    Curses is suspended for the subprocess so the orchestrator's
+    output streams to the terminal directly; on completion we wait
+    for the user to press Enter before redrawing. Returns a
+    status-line message describing the outcome (success or the
+    mapped exit-code blurb)."""
+    if t.section != STAGING:
+        return "(P: only works on STAGING rows)"
+    try:
+        idx = staging.index(t) + 1
+    except ValueError:
+        return "(P: could not locate staging row)"
+
+    script = Path(__file__).resolve().parent / "cloude-promote"
+    if not script.exists():
+        return f"(P: {script} not found)"
+
+    curses.endwin()
+    try:
+        result = subprocess.run([str(script), "--select", str(idx)])
+        # Pause so the user can read the orchestrator's summary before
+        # we redraw the dashboard over it.
+        if result.returncode == 0:
+            print("\nPromote succeeded. Press Enter to return to the dashboard.")
+        else:
+            print(
+                f"\nPromote failed (exit {result.returncode}). "
+                "Press Enter to return to the dashboard."
+            )
+        try:
+            input()
+        except EOFError:
+            pass
+    finally:
+        stdscr.clear()
+        stdscr.refresh()
+        curses.doupdate()
+
+    if result.returncode == 0:
+        return f"promoted: {t.title}"
+    msg = _PROMOTE_EXIT_MESSAGES.get(
+        result.returncode, f"exit {result.returncode}"
+    )
+    return f"promote failed: {msg}"
+
+
 def _color(stdscr, tag: str) -> int:
     if not curses.has_colors():
         return 0
@@ -427,7 +489,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  r reload  q quit"
+    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  P promote  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -731,6 +793,16 @@ def _run(stdscr) -> None:
                         )
                 else:
                     status = "(no slug: not a per-task file)"
+        elif ch == ord("P"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                staging_list: list[Task] = groups[STAGING]  # type: ignore[assignment]
+                status = _promote_staging(stdscr, t, staging_list)
+                # The new active task will show up via inotify, but
+                # nudge a reload anyway so success is reflected
+                # immediately even when watchers are absent.
+                if status.startswith("promoted: "):
+                    rows, selected, _ = reload("reloaded")
 
 
 def main() -> int:

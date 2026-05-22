@@ -139,7 +139,7 @@ stage, each tagged with who currently has the ball — `:agent:`,
 labelled with the repo it belongs to:
 
 ```text
-cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit
+cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  P promote  r reload  q quit
 
 ACTIVE (4)
   MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
@@ -172,6 +172,13 @@ Press `c` on a highlighted task to copy its slug — the `<slug>` of
 `YYYY-MM-DD-<slug>.org`, and the handle the branch, worktree, and tmux
 session are all named after — to the system clipboard, ready to paste
 into a command.
+
+Press `P` on a highlighted STAGING row to promote it without leaving
+the dashboard. Curses suspends, `bin/cloude-promote` runs the full
+chain (gh discovery + worktree + draft PR + tmux session), and the
+dashboard returns once you press Enter. The new ACTIVE row shows up
+on the next reload; press `t` on it to attach to the new task's tmux
+session.
 
 ```sh
 bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
@@ -349,15 +356,21 @@ optional properties drawer with `:ADOPT:`, `:COMPANION:`, and/or
   The property is copied verbatim into the new active task file's
   properties drawer; see [`docs/internals.md`](docs/internals.md) for
   what it means downstream.
-- `:SLUG: <slug>` — the filesystem slug `/promote` should use for
-  this idea instead of its mechanical kebab derivation of the
-  heading. Normally set by the staging-slug watcher (see [Slug
-  suggestions](#slug-suggestions) below), but you can hand-edit it
-  too — a user-set `:SLUG:` is preserved on subsequent watcher runs.
+- `:SLUG: <slug>` — override the auto-derived task slug. By default
+  the slug is derived from the heading (lowercase, non-alphanumerics
+  replaced with `-`, trimmed); setting `:SLUG:` lets you pin a
+  shorter or otherwise different slug. The slug is what the task
+  file (`tasks/active/YYYY-MM-DD-<slug>.org`), the feature branch
+  (`cloude/<slug>`), the worktree, and the tmux session
+  (`cloude-<slug>`) are all named after. Normally set automatically
+  by the staging-slug watcher (see [Slug suggestions](#slug-suggestions)
+  below), but you can hand-edit it too — a user-set `:SLUG:` is
+  preserved on subsequent watcher runs.
 
-All three are optional; `/promote` reads them from the staging idea and
+All are optional; `/promote` reads them from the staging idea and
 forwards them via flags to the orchestrator. Heading text is never
-pattern-matched to infer any of them — they're properties or nothing.
+pattern-matched to infer any of them — they're properties or
+nothing.
 
 ```org
 * cloude-cade
@@ -372,6 +385,10 @@ pattern-matched to infer any of them — they're properties or nothing.
 ** Wire the new endpoint into the dashboard
    :PROPERTIES:
    :COMPANION: 2026-05-15-acme-service-new-endpoint
+   :END:
+** A long heading whose default slug would be unwieldy
+   :PROPERTIES:
+   :SLUG: short-name
    :END:
 ```
 
@@ -482,8 +499,10 @@ Personal-TODO rows (non-repo projects) carry no repo label.
 Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `p` opens
 the highlighted task's PR in the default browser, `t` switches to its
 `cloude-<slug>` tmux session (uses `tmux switch-client` when the
-dashboard is already inside tmux, otherwise `tmux attach`), `r`
-reloads, `q` quits.
+dashboard is already inside tmux, otherwise `tmux attach`), `c` copies
+the highlighted ACTIVE/RECENT task's slug to the clipboard, `P`
+promotes the highlighted STAGING idea via `bin/cloude-promote` (curses
+suspends for the run; press Enter to return), `r` reloads, `q` quits.
 
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title
@@ -491,9 +510,9 @@ contains the query (case-insensitive substring), and surviving section
 headers show `(matched/total)` so you can see what's been filtered out.
 `↑`/`↓` still navigate the filtered list while typing. `Esc` clears
 the query and exits search mode; `Enter` locks the filter, restoring
-the normal keymap (`j`/`k`/`p`/`t`/`c`/`g`/`G`/`r`) over the filtered
-set — `Esc` while locked clears the filter, and `/` from a locked
-filter starts a fresh query.
+the normal keymap (`j`/`k`/`p`/`t`/`c`/`P`/`g`/`G`/`r`) over the
+filtered set — `Esc` while locked clears the filter, and `/` from a
+locked filter starts a fresh query.
 
 The dashboard auto-reloads (via inotify) whenever a task file changes,
 and a reload can reorder rows — a stage transition re-sorts a task
@@ -549,18 +568,22 @@ you invoke by hand:
 
 - **`/promote`** — Promote an idea from `tasks/staging.org` into an
   active task. Interactive: lists ideas grouped by project, asks
-  which to promote, auto-slugs the heading. Standard mode creates a
-  `cloude/<slug>` branch, a worktree under
-  `worktrees/<repo-name>/<slug>`, a draft PR, and a detached
-  `cloude-<slug>` tmux session — starts in `PLANNING :user:`, with
-  the container's Claude Code input box pre-filled with the staging
-  entry as the planning prompt. If the staging idea carries an
-  `:ADOPT: <PR url>` property (see [staging.org
+  which to promote, then hands off entirely to `bin/cloude-promote`
+  (a deterministic Python orchestrator that performs the gh
+  discovery, slug derivation, and flag wiring without any LLM
+  involvement). Standard mode creates a `cloude/<slug>` branch, a
+  worktree under `worktrees/<repo-name>/<slug>`, a draft PR, and a
+  detached `cloude-<slug>` tmux session — starts in `PLANNING :user:`,
+  with the container's Claude Code input box pre-filled with the
+  staging entry as the planning prompt. If the staging idea carries
+  an `:ADOPT: <PR url>` property (see [staging.org
   structure](#stagingorg-structure)), switches to **ADOPT mode**: no
   new branch or PR, checks out the existing PR's branch and starts
   in `ITERATING :user:` with the staging entry pre-filled as the
   iteration prompt so you can direct the agent on what to do with
-  the adopted work.
+  the adopted work. Because the orchestrator is deterministic, the
+  dashboard's `P` key can run it directly — see
+  [Dashboard](#dashboard).
 - **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,
