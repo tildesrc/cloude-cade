@@ -21,7 +21,7 @@ Flip the heading with the shared helper:
 "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo ITERATING --tag <tag>
 ```
 
-`<tag>` is `agent` (the per-stage default for ITERATING), **unless** an `--tag <name>` was passed to `/iterate` — then use that name. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
+`<tag>` is `agent` (the per-stage default for ITERATING, per `cloude-stages default-tag ITERATING`), **unless** an `--tag <name>` was passed to `/iterate` — then use that name. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
 
 If the current state is already `ITERATING`, this is effectively a tag-reset (useful if the tag had drifted to `:user:` or `:blocked:` and you want to mark yourself back into active work).
 

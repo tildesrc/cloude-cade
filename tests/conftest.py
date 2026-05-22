@@ -38,8 +38,12 @@ FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(BIN_DIR))
 
 from cloude_org import dod_marker_path  # noqa: E402
+from cloude_stages import todo_directive  # noqa: E402
 
-HOST_PYTHON = REPO_ROOT / ".venv-host" / "bin" / "python"
+HOST_PYTHON = Path(
+    os.environ.get("CLOUDE_HOST_PYTHON")
+    or (REPO_ROOT / ".venv-host" / "bin" / "python")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +217,7 @@ def render_task(
 
     header = (
         "#+TITLE: " + title + "\n"
-        "#+TODO: PLANNING(p!) ITERATING(i!) REVIEW(r!) MERGING(m!) | "
-        "COMPLETE(c!) DROPPED(x@)\n"
+        + todo_directive() + "\n"
         "#+TODO: PENDING(P!) UNSATISFIABLE(U!) | PASS(D!)\n"
         "#+STARTUP: overview logdrawer\n\n"
     )

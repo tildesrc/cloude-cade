@@ -44,7 +44,11 @@ except ModuleNotFoundError:
 
 REQUIRED = ("WORKTREE", "BRANCH", "PR")
 OPTIONAL = ("REPO", "ID", "ADOPTED", "SKIP_REVIEW", "COMPANION")
-BALL_TAGS = ("agent", "user", "blocked")
+
+# Share the ball-tag priority order with the rest of the workflow
+# (see cloude_stages.BALL_TAGS).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_stages import BALL_TAGS  # noqa: E402
 
 
 def _ball_tag(tags) -> str:

@@ -65,6 +65,40 @@ audit trail. Every stage transition / `/iterate` appends one entry
 under it, and the stop hook reads the latest entry's DoD verdict to
 decide whether to block.
 
+### Workflow model
+
+The workflow stage set — the keyword list (`PLANNING / ITERATING /
+REVIEW / MERGING / COMPLETE / DROPPED`), per-stage flags (terminal,
+auto-handback, dashboard order, default heading tag), DoD bullets,
+and the forward-transition map (including the `:SKIP_REVIEW:` short-
+circuit) — lives in `bin/cloude_stages.py` as the single source of
+truth. Every consumer derives from it instead of re-declaring its
+own copy:
+
+- `bin/cloude_org.py` re-exports `STAGE_KEYWORDS`, `STAGE_DOD`,
+  `BALL_TAGS`, and `PLAN_APPROVED_BULLET` from the model so its
+  existing importers keep working with no code changes.
+- Hook scripts (`cloude-task-set-state`, `cloude-on-stop`,
+  `cloude-on-user-prompt`, `cloude-on-user-question`,
+  `cloude-on-plan-accepted`) and the dashboard helpers
+  (`cloude-dash`, `cloude-list-active`, `cloude-task-info`) all
+  `from cloude_stages import ...` — no local `IN_FLIGHT`,
+  `STAGE_ORDER`, or `BALL_TAGS` tuples.
+- `bin/cloude-promote-setup` calls
+  `cloude_stages.starting_stage(mode)` for the initial-stage choice
+  by promote mode.
+- Slash commands (especially `/advance`) call the read-only
+  `bin/cloude-stages` CLI (`next`, `default-tag`, `list`, `dod`,
+  `todo-directive`) so the transition table and tag defaults aren't
+  inlined in markdown.
+
+The two hand-authored artifacts that mirror parts of the model —
+`tasks/TEMPLATE.org`'s first `#+TODO:` line and `CLAUDE.md`'s
+`#### <STAGE>` "Definition of done" bullet lists — are guarded
+against drift by `tests/test_stage_drift.py`, not by a
+"remember to edit both" comment. Edit the model, and the test
+will tell you which artifact is now stale.
+
 ### Two `#+TODO:` sequences
 
 Each task file declares two file-level TODO sequences (the second is
@@ -144,9 +178,11 @@ cold-start reasoning behind the split. The exposed surface:
   rule. Raises `DodConsistencyError` on inconsistency
   (`PASS` ⇒ all ticked/N/A; `UNSATISFIABLE` ⇒ ≥1 open;
   `PENDING` ⇒ no constraint).
-- `STAGE_DOD: dict[str, tuple[str, ...]]` — per-stage DoD bullets,
-  consumed by the skeleton generator and the hook. CLAUDE.md's
-  *Stage details* sections mirror these as the human-facing copy.
+- `STAGE_DOD: MappingProxyType[str, tuple[str, ...]]` — read-only view
+  onto the per-stage DoD bullets, consumed by the skeleton generator
+  and the hook. Owned by `cloude_stages.WORKFLOW`; CLAUDE.md's
+  *Stage details* sections mirror these as the human-facing copy,
+  with `tests/test_stage_drift.py` guarding against divergence.
 
 ### Lifecycle
 

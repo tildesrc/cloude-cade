@@ -43,10 +43,13 @@ CLOUDE_ROOT = Path(
 )
 ACTIVE = CLOUDE_ROOT / "tasks" / "active"
 
-# Match cloude-dash so the ordering is consistent across tools.
-STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
-TERMINAL_STATES = {"COMPLETE", "DROPPED"}
-BALL_TAGS = ("agent", "user", "blocked")
+# Stage ordering / terminal subset / ball-tag priority all come from
+# the workflow model so they stay in lockstep with cloude-dash.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_stages import BALL_TAGS, dashboard_order_map, terminal  # noqa: E402
+
+STAGE_ORDER = dashboard_order_map()
+TERMINAL_STATES = set(terminal())
 
 
 def _ball_tag(tags) -> str:

@@ -26,23 +26,41 @@ If `cloude-task-info` exits non-zero it prints the problem on stderr (an unparse
 
 ## 2. Determine the next state
 
-Look up the next state from this table:
+Ask the workflow model — the transition table lives in
+`bin/cloude_stages.WORKFLOW`, exposed via the `cloude-stages` CLI:
 
-| Current     | Next       |
-| ----------- | ---------- |
-| `PLANNING`  | `ITERATING` |
-| `ITERATING` | `REVIEW`   |
-| `REVIEW`    | `MERGING`  |
-| `MERGING`   | `COMPLETE` |
-| `COMPLETE`  | (terminal — stop with "already terminal, nothing to advance to") |
-| `DROPPED`   | (terminal — same) |
+```
+NEXT="$(
+    if [[ "$SKIP_REVIEW" == "t" ]]; then
+        "$CLOUDE_ROOT/bin/cloude-stages" next "$TODO" --skip-review
+    else
+        "$CLOUDE_ROOT/bin/cloude-stages" next "$TODO"
+    fi
+)"
+```
 
-**Skip-review override.** If `$SKIP_REVIEW` is truthy (`t`), the repo opts
-out of peer review and the `REVIEW` stage is skipped: when the current
-state is `ITERATING`, the next state is `MERGING` (not `REVIEW`). Every
-other transition is unchanged. (`:SKIP_REVIEW:` is copied from the staging
-project heading by `/promote`; absent means review is required, the
-default.)
+The CLI prints the next keyword on stdout, or empty when `$TODO` is
+terminal (`COMPLETE` / `DROPPED`). If the result is empty, stop with
+"already terminal, nothing to advance to".
+
+For reference (what the model encodes today):
+
+| Current     | Next                                                            |
+| ----------- | --------------------------------------------------------------- |
+| `PLANNING`  | `ITERATING`                                                     |
+| `ITERATING` | `REVIEW` (or `MERGING` when `$SKIP_REVIEW == t` — see below)    |
+| `REVIEW`    | `MERGING`                                                       |
+| `MERGING`   | `COMPLETE`                                                      |
+| `COMPLETE`  | terminal                                                        |
+| `DROPPED`   | terminal                                                        |
+
+**Skip-review override.** If `$SKIP_REVIEW` is truthy (`t`), the repo
+opts out of peer review and the `REVIEW` stage is skipped: when the
+current state is `ITERATING`, the next state is `MERGING` (not
+`REVIEW`). The `--skip-review` flag to `cloude-stages next` encodes
+this; every other transition is unchanged. (`:SKIP_REVIEW:` is copied
+from the staging project heading by `/promote`; absent means review is
+required, the default.)
 
 ## 3. Load the DoD for the current state
 
@@ -91,7 +109,13 @@ Flip the heading with the shared helper — don't hand-edit the line:
 "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo <NEXT_STATE> --tag <new-tag>
 ```
 
-`<new-tag>` is the per-stage default for `<NEXT_STATE>`, **unless** an `--tag <name>` was passed to `/advance` (then use that name):
+`<new-tag>` is the per-stage default for `<NEXT_STATE>`, **unless** an `--tag <name>` was passed to `/advance` (then use that name). Look it up the same way as `NEXT`:
+
+```
+NEW_TAG="$("$CLOUDE_ROOT/bin/cloude-stages" default-tag "$NEXT")"
+```
+
+For reference (what the model encodes today):
 
 - `ITERATING → agent`
 - `REVIEW → blocked`
