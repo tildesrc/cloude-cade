@@ -139,6 +139,26 @@ class TestListStaging:
         assert "SKIP_REVIEW=t" in result.stdout
         assert "MODE=standard" in result.stdout
 
+    def test_select_emits_slug_property(
+        self, run_script, tmp_path, fixtures_dir
+    ):
+        """An idea's optional :SLUG: surfaces as a SLUG= line; absent → empty."""
+        _build_tasks_tree(tmp_path, fixtures_dir)
+        # Third idea has no :SLUG:.
+        without = run_script(
+            "cloude-list-staging", "--select", "3",
+            env={"CLOUDE_ROOT": str(tmp_path)},
+        )
+        assert without.returncode == 0
+        assert "SLUG=''" in without.stdout
+        # Fourth idea carries :SLUG: hand-picked-slug.
+        with_slug = run_script(
+            "cloude-list-staging", "--select", "4",
+            env={"CLOUDE_ROOT": str(tmp_path)},
+        )
+        assert with_slug.returncode == 0
+        assert "SLUG=hand-picked-slug" in with_slug.stdout
+
     def test_select_out_of_range_exits_2(
         self, run_script, tmp_path, fixtures_dir
     ):

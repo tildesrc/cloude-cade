@@ -1,0 +1,388 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+# Deterministic /promote orchestrator.
+#
+# Given a staging index N (from `bin/cloude-list-staging`), this
+# performs the discovery steps that the LLM-driven /promote skill used
+# to do by hand — gh repo view / gh pr view, slug derivation, flag
+# wiring — then exec's `bin/cloude-promote-setup` with all the args
+# pre-resolved.
+#
+# Invocable from non-LLM contexts (e.g. the curses dashboard's `P`
+# key) since the entire flow is mechanical: no prompts, no LLM, no
+# interactive lookups.
+#
+# Usage:
+#   cloude-promote --select N [--slug SLUG]
+#   cloude-promote --help
+#
+# Slug precedence (highest first):
+#   1. --slug SLUG       (explicit override)
+#   2. :SLUG: property   (set on the staging idea's drawer)
+#   3. heading-derive    (lowercase, non-alphanumerics → `-`, trim)
+#
+# Exit codes (this script's own — cloude-promote-setup's 10..30 are
+# also propagated):
+#   0     success
+#  30     argument validation (missing/malformed flags)
+#  40     `cloude-list-staging --select N` failed (e.g. out of range)
+#  41     resolved slug is empty (heading has no alphanumeric chars
+#         and no :SLUG: was set)
+#  42     gh repo view / gh pr view failed
+#  43     ADOPT PR not OPEN / cross-repository / repo mismatch
+#
+# Dry-run mode (for tests): set CLOUDE_PROMOTE_DRY_RUN=1 in the
+# environment and the script prints the assembled cloude-promote-setup
+# argv (one per line) to stdout and exits 0 instead of exec'ing.
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+# BIN is always this script's directory — cloude-promote-setup and
+# cloude-list-staging are siblings. CLOUDE_ROOT controls where the
+# *task tree* (staging.org, tasks/active/, …) is located; it's only
+# forwarded to child scripts as an environment variable, not used to
+# locate the scripts themselves. Keeping these separate matters for
+# tests that point CLOUDE_ROOT at a temp dir while still running the
+# real binaries.
+BIN = Path(__file__).resolve().parent
+CLOUDE_ROOT = Path(os.environ.get("CLOUDE_ROOT") or BIN.parent)
+
+
+def derive_slug(heading: str) -> str:
+    """Reduce a heading to a filesystem-safe slug.
+
+    Lowercase, replace any non-alphanumeric run with `-`, trim
+    leading/trailing dashes. Same rule the LLM-driven skill applied;
+    centralized here so the dashboard and skill paths agree.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+
+
+def parse_repo_url(url: str) -> tuple[str, str]:
+    """Return (owner, repo) for a GitHub URL in HTTPS or scp-form SSH.
+
+    Both `git@github.com:OWNER/REPO[.git]` and
+    `https://github.com/OWNER/REPO[.git]` are accepted, matching the
+    two forms `cloude-promote-setup` parses. Returns the bare
+    `owner/repo` parts so the caller can build either the canonical
+    HTTPS clone URL or the `OWNER/REPO` argument `gh` expects.
+    Raises ValueError for any other shape.
+    """
+    s = url.strip()
+    if s.startswith("git@github.com:"):
+        owner_repo = s[len("git@github.com:"):]
+    elif s.startswith("https://github.com/"):
+        owner_repo = s[len("https://github.com/"):]
+    else:
+        raise ValueError(f"unsupported repo URL shape: {url!r}")
+    owner_repo = owner_repo.removesuffix(".git").strip("/")
+    if "/" not in owner_repo:
+        raise ValueError(f"could not parse owner/repo from: {url!r}")
+    owner, repo = owner_repo.split("/", 1)
+    if not owner or not repo:
+        raise ValueError(f"could not parse owner/repo from: {url!r}")
+    return owner, repo
+
+
+def _eprint(*args, **kwargs) -> None:
+    kwargs.setdefault("file", sys.stderr)
+    print(*args, **kwargs)
+
+
+def _usage(stream=sys.stdout) -> None:
+    stream.write(
+        "usage: cloude-promote --select N [--slug SLUG]\n"
+        "       cloude-promote --help\n"
+    )
+
+
+def _parse_args(argv: list[str]) -> tuple[int, str | None]:
+    """Return (select_index, slug_override) or exit on a usage error."""
+    select: int | None = None
+    slug: str | None = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            _usage()
+            sys.exit(0)
+        elif arg == "--select":
+            i += 1
+            if i >= len(argv):
+                _eprint("cloude-promote: --select needs an integer")
+                sys.exit(30)
+            try:
+                select = int(argv[i])
+            except ValueError:
+                _eprint(
+                    f"cloude-promote: --select must be an integer, got "
+                    f"{argv[i]!r}"
+                )
+                sys.exit(30)
+        elif arg == "--slug":
+            i += 1
+            if i >= len(argv):
+                _eprint("cloude-promote: --slug needs a value")
+                sys.exit(30)
+            slug = argv[i]
+        else:
+            _eprint(f"cloude-promote: unexpected argument: {arg!r}")
+            _usage(sys.stderr)
+            sys.exit(30)
+        i += 1
+    if select is None:
+        _eprint("cloude-promote: --select N is required")
+        _usage(sys.stderr)
+        sys.exit(30)
+    return select, slug
+
+
+def _read_staging_record(select: int) -> dict[str, str]:
+    """Call `cloude-list-staging --select N` and parse its KEY=VALUE output.
+
+    On a non-zero exit (out-of-range index, parse failure, …), forward
+    the script's stderr to ours and exit 40. The KEY=VALUE shape is
+    shell-safe-quoted; `shlex.split` undoes the quoting cleanly.
+    """
+    listing = BIN / "cloude-list-staging"
+    if not listing.exists():
+        _eprint(f"cloude-promote: {listing} not found")
+        sys.exit(40)
+    result = subprocess.run(
+        [str(listing), "--select", str(select)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        sys.exit(40)
+    record: dict[str, str] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # `cloude-list-staging` emits each line as KEY=<shell-quoted-value>
+        # so a single shlex.split round-trip strips the quoting and
+        # gives us back the literal value.
+        tokens = shlex.split(line)
+        if not tokens:
+            continue
+        token = tokens[0]
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        record[key] = value
+    required = ("REPO", "HEADING", "MODE")
+    missing = [k for k in required if k not in record]
+    if missing:
+        _eprint(
+            "cloude-promote: cloude-list-staging output missing keys: "
+            + ", ".join(missing)
+        )
+        sys.exit(40)
+    return record
+
+
+def _gh_json(*argv: str) -> dict | list:
+    """Run `gh ...` and return its parsed JSON output. Exit 42 on failure."""
+    result = subprocess.run(
+        ["gh", *argv],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        _eprint(
+            "cloude-promote: gh "
+            + " ".join(shlex.quote(a) for a in argv)
+            + f" failed (exit {result.returncode}):"
+        )
+        if result.stderr.strip():
+            _eprint(result.stderr.rstrip())
+        sys.exit(42)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        _eprint(f"cloude-promote: gh output was not valid JSON: {exc}")
+        sys.exit(42)
+
+
+def _resolve_default_branch(owner: str, repo: str) -> str:
+    """Look up `<owner>/<repo>`'s default branch via `gh repo view`."""
+    data = _gh_json(
+        "repo", "view", f"{owner}/{repo}",
+        "--json", "defaultBranchRef",
+    )
+    if not isinstance(data, dict):
+        _eprint("cloude-promote: unexpected gh repo view shape")
+        sys.exit(42)
+    ref = data.get("defaultBranchRef") or {}
+    name = ref.get("name") if isinstance(ref, dict) else None
+    if not name:
+        _eprint("cloude-promote: gh repo view returned no defaultBranchRef")
+        sys.exit(42)
+    return str(name)
+
+
+def _resolve_adopt_pr(pr_url: str, project_owner: str, project_repo: str) -> dict[str, str]:
+    """Look up an existing PR for ADOPT mode and validate its shape.
+
+    Returns a dict with `pr_url`, `pr_number`, `head_ref`, `base_ref`.
+    Refuses (exit 43) when the PR isn't OPEN, is cross-repository, or
+    lives in a different repo than the staging project's `:REPO:`.
+    """
+    data = _gh_json(
+        "pr", "view", pr_url,
+        "--json",
+        "number,state,headRefName,baseRefName,isCrossRepository,"
+        "headRepositoryOwner,headRepository,url",
+    )
+    if not isinstance(data, dict):
+        _eprint("cloude-promote: unexpected gh pr view shape")
+        sys.exit(42)
+    state = (data.get("state") or "").upper()
+    if state != "OPEN":
+        _eprint(
+            f"cloude-promote: PR {pr_url} is not OPEN (state: {state or 'unknown'}). "
+            f"/finalize handles closed/merged PRs; /promote only adopts open ones."
+        )
+        sys.exit(43)
+    if data.get("isCrossRepository"):
+        _eprint(
+            f"cloude-promote: PR {pr_url} is cross-repository "
+            "(head is in a fork). ADOPT mode can't push to a fork's "
+            "branch without an extra remote."
+        )
+        sys.exit(43)
+    # Validate the PR repo matches the staging project's :REPO:.
+    head_owner = (data.get("headRepositoryOwner") or {}).get("login") or ""
+    head_repo = (data.get("headRepository") or {}).get("name") or ""
+    if head_owner.lower() != project_owner.lower() or head_repo.lower() != project_repo.lower():
+        _eprint(
+            f"cloude-promote: PR repo {head_owner}/{head_repo} does not "
+            f"match staging project's :REPO: ({project_owner}/{project_repo})."
+        )
+        sys.exit(43)
+    head_ref = data.get("headRefName") or ""
+    base_ref = data.get("baseRefName") or ""
+    number = data.get("number")
+    canonical_url = data.get("url") or pr_url
+    if not head_ref or not base_ref or number is None:
+        _eprint("cloude-promote: gh pr view returned an incomplete record")
+        sys.exit(42)
+    return {
+        "pr_url": str(canonical_url),
+        "pr_number": str(number),
+        "head_ref": str(head_ref),
+        "base_ref": str(base_ref),
+    }
+
+
+def _today_iso() -> str:
+    return _dt.date.today().isoformat()
+
+
+def main(argv: list[str]) -> int:
+    select, slug_override = _parse_args(argv)
+    record = _read_staging_record(select)
+
+    repo_url = record.get("REPO", "")
+    heading = record.get("HEADING", "")
+    mode = record.get("MODE", "")
+    if mode not in ("standard", "adopt"):
+        _eprint(
+            f"cloude-promote: cloude-list-staging returned unknown MODE: "
+            f"{mode!r}"
+        )
+        return 40
+
+    try:
+        project_owner, project_repo = parse_repo_url(repo_url)
+    except ValueError as exc:
+        _eprint(f"cloude-promote: {exc}")
+        return 40
+
+    # Resolve the slug. Precedence: --slug > :SLUG: > derive from heading.
+    if slug_override is not None:
+        slug = slug_override.strip()
+        slug_source = "--slug"
+    else:
+        staging_slug = (record.get("SLUG") or "").strip()
+        if staging_slug:
+            slug = staging_slug
+            slug_source = ":SLUG: property"
+        else:
+            slug = derive_slug(heading)
+            slug_source = "heading-derive"
+    if not slug:
+        _eprint(
+            f"cloude-promote: resolved slug is empty (source: {slug_source}). "
+            f"Heading {heading!r} has no alphanumeric content — pass --slug "
+            "or set the staging idea's :SLUG: property."
+        )
+        return 41
+
+    task_file = CLOUDE_ROOT / "tasks" / "active" / f"{_today_iso()}-{slug}.org"
+
+    # Mode-specific discovery.
+    if mode == "standard":
+        default_branch = _resolve_default_branch(project_owner, project_repo)
+        mode_args = ["--default-branch", default_branch]
+    else:
+        pr_url = record.get("PR_URL", "")
+        if not pr_url:
+            _eprint("cloude-promote: ADOPT mode but PR_URL is empty")
+            return 40
+        pr = _resolve_adopt_pr(pr_url, project_owner, project_repo)
+        mode_args = [
+            "--head-ref", pr["head_ref"],
+            "--base-ref", pr["base_ref"],
+            "--pr-url", pr["pr_url"],
+            "--pr-number", pr["pr_number"],
+        ]
+
+    setup_argv = [
+        str(BIN / "cloude-promote-setup"),
+        "--mode", mode,
+        "--slug", slug,
+        "--repo-url", repo_url,
+        "--task-file", str(task_file),
+        "--staging-heading", heading,
+        "--heading", heading,
+        *mode_args,
+    ]
+    if (record.get("SKIP_REVIEW") or "").strip():
+        setup_argv.append("--skip-review")
+    companion = (record.get("COMPANION") or "").strip()
+    if companion:
+        setup_argv.extend(["--companion", companion])
+
+    if os.environ.get("CLOUDE_PROMOTE_DRY_RUN"):
+        # Test mode: emit the argv and exit. One arg per line so tests
+        # can diff against a fixed expected list without needing to
+        # care about shell quoting.
+        for a in setup_argv:
+            print(a)
+        return 0
+
+    # exec the orchestrator so its stdout / stderr / exit code reach
+    # the caller directly. os.execvp replaces our process so there's
+    # nothing left to relay.
+    os.execvp(setup_argv[0], setup_argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

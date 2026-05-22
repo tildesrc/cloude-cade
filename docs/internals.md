@@ -40,7 +40,7 @@ off of); they're omitted on ordinary tasks.
 
 ## Staging-idea trigger properties
 
-`/promote` reads two optional properties from each staging idea
+`/promote` reads three optional properties from each staging idea
 sub-heading's properties drawer (in addition to the project-level
 `:REPO:` and `:SKIP_REVIEW:`):
 
@@ -48,13 +48,15 @@ sub-heading's properties drawer (in addition to the project-level
 | ------------------- | ------------------------------------------------------------------ |
 | `:ADOPT:`           | *(optional)* URL of an existing open PR in the project's repo. Triggers ADOPT mode (`/promote` checks out the PR's branch as a worktree rather than opening a new draft PR). Without this property, the idea promotes as a standard task. Renders `:ADOPTED: t` into the new active task's properties drawer. |
 | `:COMPANION:`       | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION:` property. |
+| `:SLUG:`            | *(optional)* Override the auto-derived task slug. The default slug is derived from the heading (`re.sub(r'[^a-z0-9]+', '-', heading.lower()).strip('-')`); when `:SLUG:` is set, that value is used verbatim. `cloude-promote`'s `--slug` flag wins over both. |
 
-Both are detected by `bin/cloude-list-staging` (which emits `MODE` /
-`PR_URL` / `COMPANION` lines for the chosen idea) and forwarded by
-`/promote` to `bin/cloude-promote-setup` via the matching `--mode` /
-`--pr-url` / `--companion` flags. The staging idea's heading text
-and body are free-form in both modes — mode and pairing are determined
-entirely by property presence, never by heading-text pattern matching.
+All three are detected by `bin/cloude-list-staging` (which emits
+`MODE` / `PR_URL` / `COMPANION` / `SLUG` lines for the chosen idea)
+and forwarded by `bin/cloude-promote` to `bin/cloude-promote-setup`
+via the matching `--mode` / `--pr-url` / `--companion` / `--slug`
+flags. The staging idea's heading text and body are free-form in
+both modes — mode, pairing, and slug are determined entirely by
+property presence, never by heading-text pattern matching.
 
 ## Per-stage log entry: schema and hook check
 
@@ -188,13 +190,40 @@ dependency, and runs on plain `python3`.
   trigger properties*); idea heading text is free-form and never
   pattern-matched. With `--select N`, instead emits the chosen
   idea's full record (`REPO`, `HEADING`, `MODE`, `PR_URL`,
-  `COMPANION`, `SKIP_REVIEW`) as shell-safe `KEY=VALUE` lines,
-  so `/promote` can `eval` it rather than re-parsing staging.org.
-  `MODE` is `adopt` iff the idea has `:ADOPT:` set; `PR_URL` carries
-  the `:ADOPT:` value in that case. `COMPANION` carries the
-  idea's `:COMPANION:` property (empty if absent). `SKIP_REVIEW`
-  carries the project heading's optional `:SKIP_REVIEW:` property.
-  Used by `/promote` step 1.
+  `COMPANION`, `SKIP_REVIEW`, `SLUG`) as shell-safe `KEY=VALUE`
+  lines, so `/promote` and `bin/cloude-promote` can `eval` (or
+  parse) it rather than re-walking staging.org. `MODE` is `adopt`
+  iff the idea has `:ADOPT:` set; `PR_URL` carries the `:ADOPT:`
+  value in that case. `COMPANION` carries the idea's `:COMPANION:`
+  property (empty if absent). `SKIP_REVIEW` carries the project
+  heading's optional `:SKIP_REVIEW:` property. `SLUG` carries the
+  idea's optional `:SLUG:` property (empty if absent). Used by
+  `/promote` step 1 and by `bin/cloude-promote --select N`.
+- **`cloude-promote`** — Deterministic `/promote` orchestrator. Takes
+  `--select N` (optionally `--slug SLUG`), calls `cloude-list-staging
+  --select N` for the idea record, performs the mode-specific gh
+  discovery (`gh repo view <owner>/<repo>` for the default branch in
+  standard mode; `gh pr view <pr-url>` + state/cross-repo/repo-match
+  validation in ADOPT mode), resolves the slug by precedence
+  (`--slug` > idea's `:SLUG:` > heading-derive), assembles the
+  `cloude-promote-setup` argv with all required flags
+  (`--mode`, `--slug`, `--repo-url`, `--task-file`,
+  `--staging-heading`, `--heading`, mode-specific
+  `--default-branch` or `--head-ref`/`--base-ref`/`--pr-url`/`--pr-number`,
+  and optional `--skip-review` / `--companion`), and `exec`'s it.
+  Because the entire flow is mechanical, the curses dashboard
+  (`bin/cloude-dash`) can invoke it on a `P` key press without any
+  LLM involvement; the `/promote` skill also hands off to it after
+  showing the listing and asking the user to pick an index. Exit
+  codes (above `cloude-promote-setup`'s 10..30 range): `30`
+  argument validation, `40` `cloude-list-staging --select N` failed
+  / out-of-range index, `41` resolved slug is empty (heading has no
+  alphanumeric chars and no `:SLUG:` set), `42` gh call failed,
+  `43` ADOPT PR not OPEN / cross-repository / repo mismatch. The
+  `CLOUDE_PROMOTE_DRY_RUN=1` env var skips the exec and instead
+  prints the assembled `cloude-promote-setup` argv (one arg per
+  line) — used by `tests/test_promote.py` to assert on flag wiring
+  without spinning up real worktrees / draft PRs / tmux sessions.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
