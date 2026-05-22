@@ -484,6 +484,66 @@ hide the change from `git status` via `git update-index
 `index` and `info/exclude`, so these changes are isolated to the one
 worktree.
 
+## Inter-agent inbox
+
+Cloude agents can leave each other short messages via a file-based
+inbox at `inbox/<recipient-slug>/`. Every agent has a *slug*
+address:
+
+- An in-container task agent's slug is the task's short kebab
+  slug — the `<slug>` of `tasks/active/YYYY-MM-DD-<slug>.org`, the
+  same handle `c` copies on the dashboard.
+- The host Claude session's slug is the literal `host`.
+
+A message is a plain-text file with `to:` / `from:` / `date:`
+headers, a blank line, and a free-form body:
+
+```
+to: midterm-election-demo
+from: host
+date: 2026-05-22T14:00:00.000+02:00
+
+Heads up — the data team just pushed the new schema. Re-run the
+fixture loader before continuing the migration.
+```
+
+### Sending
+
+From either the host session or inside a task container:
+
+```sh
+bin/cloude-send-message <to-slug>           # body via stdin
+bin/cloude-send-message <to-slug> -m TEXT   # body via -m
+```
+
+The sender slug is derived from `$CLOUDE_TASK_FILE` (the per-task
+env var `bin/cloude-run` exports) or falls back to `host` when the
+env var is unset. The recipient slug is validated against active
+task slugs and `host`; an unknown slug only warns — pre-messaging a
+not-yet-promoted task is allowed. The message is written atomically
+(tmp + `os.link`) so the recipient never sees a half-written file.
+
+### Receiving
+
+A `UserPromptSubmit` hook (`bin/cloude-on-inbox`) fires at the
+start of every agent turn — host and container alike — and surfaces
+any unread messages in the agent's prompt context, then moves them
+into `inbox/<slug>/.seen/` so they aren't re-surfaced. The agent
+is reminded to use the `AskUserQuestion` tool to ask the user how
+to handle each message; messages are **advisory** — the user owns
+the decision to act.
+
+Manual read (e.g. to revisit messages you've already acknowledged):
+
+```sh
+bin/cloude-read-inbox            # unread; archives by default
+bin/cloude-read-inbox --all      # also include .seen/
+bin/cloude-read-inbox --no-archive   # peek without archiving
+```
+
+The `/inbox` slash command is shorthand for `cloude-read-inbox
+--all --no-archive`.
+
 ## Slash commands
 
 Project-scoped slash commands live in `.claude/commands/`. The ones
@@ -563,6 +623,15 @@ you invoke by hand:
   to `ITERATING :user:`** with a one-paragraph explanation appended
   to `** Notes` — conflict resolution is `/babysit-ci`'s job during
   ITERATING, not this skill's.
+
+**Both** (host or in-container):
+
+- **`/inbox`** — Re-read this agent's inbox (unread + previously
+  seen) without archiving. Shorthand for
+  `bin/cloude-read-inbox --all --no-archive`. New messages are
+  surfaced automatically by the `UserPromptSubmit` hook
+  (`bin/cloude-on-inbox`) on every turn; this slash command is
+  the manual escape hatch for revisiting them.
 
 ## Internals
 
