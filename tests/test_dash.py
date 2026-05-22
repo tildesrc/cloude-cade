@@ -176,6 +176,45 @@ class TestLoadTasks:
         assert len(groups[dash.RECENT]) == dash.RECENT_LIMIT
 
 
+class TestStagingOrderMatchesListing:
+    """The `P` key on the dashboard turns the highlighted STAGING row's
+    position in `groups[STAGING]` into a `--select N` index for
+    `cloude-list-staging`. The two code paths walk the same tree
+    independently, so this regression test pins down that they agree
+    on the order — if either side ever changes its filter or iteration
+    direction, this test will catch it before the `P` key promotes the
+    wrong idea.
+    """
+
+    def test_dash_staging_matches_cloude_list_staging_indices(
+        self, dash, run_script, tmp_path, fixtures_dir, monkeypatch
+    ):
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir(parents=True)
+        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
+        monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        groups = dash.load_tasks()
+        dash_titles = [t.title for t in groups[dash.STAGING]]
+        # Now ask cloude-list-staging for each index in order and
+        # collect the HEADING field. The two should match item-for-item.
+        listing_titles: list[str] = []
+        for i in range(1, len(dash_titles) + 1):
+            r = run_script(
+                "cloude-list-staging", "--select", str(i),
+                env={"CLOUDE_ROOT": str(tmp_path)},
+            )
+            assert r.returncode == 0, r.stderr
+            for line in r.stdout.splitlines():
+                if line.startswith("HEADING="):
+                    # Strip the shell-quoted value: HEADING='foo bar' or HEADING=foo
+                    val = line.split("=", 1)[1]
+                    if val.startswith("'") and val.endswith("'"):
+                        val = val[1:-1]
+                    listing_titles.append(val)
+                    break
+        assert dash_titles == listing_titles
+
+
 class TestTaskKey:
     def test_stable_identity_across_directory_moves(self, dash, tmp_path):
         # A task file is moved active/ -> completed/ as part of /finalize;
