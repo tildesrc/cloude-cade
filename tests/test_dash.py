@@ -333,8 +333,102 @@ class TestFinalizeOverrides:
         assert 11 not in dash._FINALIZE_OVERRIDES
 
     def test_prompts_are_y_n_questions(self, dash):
-        # The prompts are read by `input()` and parsed against `y`/`yes`
-        # — keep them in the same shape so the user always knows what
-        # they're answering.
+        # The prompts are rendered in the finalize modal's footer and
+        # answered via `_modal_read_yn` (y/Y → True; n/N/Esc/q/Enter →
+        # False) — keep them in the same shape so the user always
+        # knows what they're answering.
         for code, (prompt, _flag) in dash._FINALIZE_OVERRIDES.items():
             assert "[y/N]" in prompt, f"exit {code}: {prompt!r}"
+
+    def test_override_codes_also_appear_in_exit_messages(self, dash):
+        # Every override-able code must also have a human-readable
+        # label in _FINALIZE_EXIT_MESSAGES — the modal uses that label
+        # when the user answers N to the override prompt and we render
+        # the final "finalize failed: <reason>" status line. If the two
+        # tables drift, the failure-side copy would silently fall back
+        # to `exit N` for codes the user actually saw a prompt for.
+        for code in dash._FINALIZE_OVERRIDES:
+            assert code in dash._FINALIZE_EXIT_MESSAGES, (
+                f"override code {code} missing from _FINALIZE_EXIT_MESSAGES"
+            )
+
+
+class TestFinalizeExitMessages:
+    """`_FINALIZE_EXIT_MESSAGES` powers the finalize modal's
+    `exit N (reason) — Enter/q to close` footer and the dashboard's
+    `finalize failed: <reason>` status-line copy. The reasons are
+    sourced from `bin/cloude-finalize-cleanup`'s usage block; if a
+    new exit code is added there without a matching entry here, the
+    modal silently falls back to a bare `exit N` footer.
+    """
+
+    # Every exit code documented in cloude-finalize-cleanup's usage
+    # block as of this commit. Drives the completeness check below.
+    _DOCUMENTED_CODES = frozenset(
+        {10, 11, 12, 13, 14, 20, 21, 22, 23, 25, 26, 30}
+    )
+
+    def test_covers_every_documented_exit_code(self, dash):
+        missing = self._DOCUMENTED_CODES - dash._FINALIZE_EXIT_MESSAGES.keys()
+        assert not missing, (
+            f"_FINALIZE_EXIT_MESSAGES is missing entries for: {sorted(missing)}"
+        )
+
+    def test_does_not_invent_codes_not_in_the_script(self, dash):
+        extra = dash._FINALIZE_EXIT_MESSAGES.keys() - self._DOCUMENTED_CODES
+        assert not extra, (
+            f"_FINALIZE_EXIT_MESSAGES has codes not documented in "
+            f"cloude-finalize-cleanup: {sorted(extra)}"
+        )
+
+    def test_reasons_are_non_empty_strings(self, dash):
+        for code, reason in dash._FINALIZE_EXIT_MESSAGES.items():
+            assert isinstance(reason, str) and reason.strip(), (
+                f"exit {code} reason is empty: {reason!r}"
+            )
+
+
+class TestFinalizeStatusMessage:
+    """`_finalize_status_message` is the pure copy-generator the
+    dashboard's status line uses once the finalize modal dismisses.
+    Locks in the four user-visible outcomes."""
+
+    def test_success(self, dash):
+        msg = dash._finalize_status_message(
+            exit_code=0, aborted=False, title="my task"
+        )
+        assert msg == "finalized: my task"
+
+    def test_aborted_at_initial_force_drop(self, dash):
+        # Initial force-drop-N path: no subprocess ran, so exit_code
+        # is 0 but aborted is True.
+        msg = dash._finalize_status_message(
+            exit_code=0, aborted=True, title="my task"
+        )
+        assert msg == "finalize aborted"
+
+    def test_aborted_at_override_prompt(self, dash):
+        # User answered N to an override prompt after a non-zero exit
+        # (e.g. 12 / 13 / 14). Status line still reads "aborted" so
+        # it reflects the user choice rather than blaming the exit
+        # code the override would have papered over.
+        msg = dash._finalize_status_message(
+            exit_code=12, aborted=True, title="my task"
+        )
+        assert msg == "finalize aborted"
+
+    def test_failure_uses_mapped_reason(self, dash):
+        # An exit code present in _FINALIZE_EXIT_MESSAGES is rendered
+        # with the human label.
+        msg = dash._finalize_status_message(
+            exit_code=10, aborted=False, title="my task"
+        )
+        assert msg == "finalize failed: PR not MERGED"
+
+    def test_failure_falls_back_to_bare_exit_code(self, dash):
+        # An unmapped exit code (shouldn't happen in practice, but
+        # cheap to guard) renders as `exit N`.
+        msg = dash._finalize_status_message(
+            exit_code=99, aborted=False, title="my task"
+        )
+        assert msg == "finalize failed: exit 99"
