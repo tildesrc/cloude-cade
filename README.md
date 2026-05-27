@@ -456,17 +456,22 @@ promotes the highlighted STAGING idea via `bin/cloude-promote` (curses
 suspends for the run; press Enter to return), `r` reloads, `q` quits.
 
 Press `f` on a highlighted ACTIVE row to finalize the task via
-`bin/cloude-finalize-cleanup` — the same chain `/finalize` uses. For
-a task already in `COMPLETE` or `DROPPED` the cleanup runs straight
-away (verify-or-close the PR, kill the tmux session, remove the
-worktree and DinD volume, delete the local branch on COMPLETE, move
-the task file out of `tasks/active/`). For a task still in a
-non-terminal state, the dashboard first asks `Force-drop and
-finalize? [y/N]`; on `y` it reruns the cleanup with `--force-drop`.
-The override-able exit codes (dirty worktree, in-use DinD volume,
-root-owned files) get a y/N prompt and a retry with the matching
-flag, exactly as `/finalize` walks them. Press Enter to return to
-the dashboard when the run finishes.
+`bin/cloude-finalize-cleanup` — the same chain `/finalize` uses.
+`cloude-finalize-cleanup`'s stdout/stderr stream live into the same
+centered modal overlay the `P` key uses, so the dashboard rows stay
+visible at the margins and there's no `endwin()` flash. For a task
+already in `COMPLETE` or `DROPPED` the cleanup runs straight away
+(verify-or-close the PR, kill the tmux session, remove the worktree
+and DinD volume, delete the local branch on COMPLETE, move the task
+file out of `tasks/active/`). For a task still in a non-terminal
+state, the modal first asks `Force-drop and finalize? [y/N]` in its
+footer; on `y` it runs the cleanup with `--force-drop`. The
+override-able exit codes (dirty worktree, in-use DinD volume,
+foreign-owned files) prompt the matching y/N in the footer and
+re-run with the override flag, exactly as `/finalize` walks them —
+the buffer keeps output from both runs separated by a visible
+`--- rerunning with <flag> ---` line. `Enter`, `q`, or `Esc`
+dismisses the modal when the run finishes.
 
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title
