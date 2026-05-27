@@ -467,11 +467,17 @@ file out of `tasks/active/`). For a task still in a non-terminal
 state, the modal first asks `Force-drop and finalize? [y/N]` in its
 footer; on `y` it runs the cleanup with `--force-drop`. The
 override-able exit codes (dirty worktree, in-use DinD volume,
-foreign-owned files) prompt the matching y/N in the footer and
+foreign-owned files, inaccessible PR on `COMPLETE`) prompt the
+matching y/N in the footer and
 re-run with the override flag, exactly as `/finalize` walks them —
 the buffer keeps output from both runs separated by a visible
-`--- rerunning with <flag> ---` line. `Enter`, `q`, or `Esc`
-dismisses the modal when the run finishes.
+`--- rerunning with <flag> ---` line. The cleanup is also
+idempotent against already-absent resources: a missing tmux session,
+DinD volume, local branch, or worktree (directory and/or git
+bookkeeping) is reported as `absent` in the summary rather than
+failing, so re-running finalize on a partially-cleaned-up task is
+safe. `Enter`, `q`, or `Esc` dismisses the modal when the run
+finishes.
 
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title

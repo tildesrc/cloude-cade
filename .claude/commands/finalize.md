@@ -44,7 +44,11 @@ The script bails with distinct exit codes when it needs a decision. In each case
 
 - **Exit 14** — worktree contains files owned by another user (typically root, from an in-container DinD test stack: `coverage/`, `tmp/minio/`, `tmp/dbdata/`, etc.). The host user can't unlink them, so `git worktree remove --force` fails with `Permission denied`. The script reports the foreign-owned file count. Ask the user: nuke the dir via a privileged `docker run --user root … rm -rf` (destructive — discards everything in the worktree) or abort? On confirm, rerun with `--force-root` (this implies `--force-worktree`).
 
+- **Exit 15** — task is `COMPLETE` but `gh pr view` couldn't reach the PR at all (repo deleted, auth lost, network failure — distinct from "PR exists but state != MERGED", which is still exit 10). Ask the user: proceed with cleanup anyway, or abort? On confirm, rerun with `--force-pr-absent`. Note: for `DROPPED` / forced-drop tasks, an inaccessible PR is tolerated silently and never raises this exit code — the script just skips the close step and labels the PR `not accessible` in the summary.
+
 Any other non-zero exit is a hard failure: relay stderr to the user and stop. The script's "Succeeded so far" trail (when present) tells the user what was already done.
+
+Idempotency note: the cleanup chain tolerates *already-absent* resources — tmux session, DinD volume, local branch, and worktree (whether just the directory, just the git bookkeeping entry, or both) all label as `absent` / `not present` in the summary rather than failing. Re-running `/finalize` on a partially-cleaned-up task is safe.
 
 ## 4. Report
 
