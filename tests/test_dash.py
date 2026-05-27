@@ -231,6 +231,43 @@ class TestTaskKey:
         assert dash._task_key(t1) == dash._task_key(t2)
 
 
+class TestWrapLines:
+    """`_wrap_lines` powers the promote-modal body renderer: it
+    flattens a streamed output buffer into rows that fit the modal's
+    inner width so `addnstr` can draw them without truncating at the
+    border. The behaviour is tiny but load-bearing — if it ever
+    truncates instead of wrapping, long paths in the orchestrator's
+    summary block stop being visible.
+    """
+
+    def test_short_lines_unchanged(self, dash):
+        assert dash._wrap_lines("abc\ndef", 10) == ["abc", "def"]
+
+    def test_empty_lines_preserved(self, dash):
+        assert dash._wrap_lines("a\n\nb", 10) == ["a", "", "b"]
+
+    def test_long_line_hard_wraps(self, dash):
+        assert dash._wrap_lines("abcdefghij", 4) == ["abcd", "efgh", "ij"]
+
+    def test_mixed_wrap_and_short(self, dash):
+        result = dash._wrap_lines("hello\nworldwide", 5)
+        assert result == ["hello", "world", "wide"]
+
+    def test_empty_input_yields_one_empty_line(self, dash):
+        # split("\n") on "" returns [""], which preserves a single
+        # empty row — important for the modal's "no output yet"
+        # branch to know it has zero real content.
+        assert dash._wrap_lines("", 10) == [""]
+
+    def test_zero_width_returns_empty(self, dash):
+        # Defensive: a degenerate width should not loop forever.
+        assert dash._wrap_lines("abc", 0) == []
+
+    def test_exact_width_no_wrap(self, dash):
+        # A line exactly at the width fits on one row (no spillover).
+        assert dash._wrap_lines("abcd", 4) == ["abcd"]
+
+
 class TestFlatten:
     def test_filters_to_matching_titles_and_drops_empty_sections(
         self, dash, tmp_path

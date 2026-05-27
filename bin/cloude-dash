@@ -421,6 +421,175 @@ _PROMOTE_EXIT_MESSAGES = {
     43: "ADOPT PR is not OPEN / cross-repo / repo mismatch",
 }
 
+# Idle-tick timeout (ms) for the main getch() loop in _run(). The
+# promote modal's run loop drops it to a faster tick while the
+# subprocess streams output, then restores this value on the way out.
+_MAIN_LOOP_TIMEOUT_MS = 500
+_MODAL_RUN_TICK_MS = 50
+
+
+def _wrap_lines(text: str, width: int) -> list[str]:
+    """Split `text` on newlines, then hard-wrap each line to fit `width`.
+
+    Each input line is broken into one or more output lines, each at
+    most `width` characters. Empty lines are preserved. `width` must
+    be >= 1; the modal's inner-width calc guarantees that.
+    """
+    if width < 1:
+        return []
+    out: list[str] = []
+    for line in text.split("\n"):
+        if not line:
+            out.append("")
+            continue
+        while len(line) > width:
+            out.append(line[:width])
+            line = line[width:]
+        out.append(line)
+    return out
+
+
+def _draw_promote_modal(
+    stdscr,
+    *,
+    title: str,
+    body: str,
+    elapsed: float,
+    running: bool,
+    exit_code: int | None,
+) -> None:
+    """Draw the promote modal over the dashboard.
+
+    Centered, bordered window sized to the terminal with a small
+    margin. Body tail-renders so the newest output is always visible.
+    The dashboard underneath is not erased — only the modal's mh*mw
+    cells are written, so the rows at the margins stay readable.
+
+    A fresh curses.newwin is built each call: cheap, and a clean way
+    to absorb terminal resizes that happen between ticks.
+    """
+    h, w = stdscr.getmaxyx()
+    mh = min(h, max(10, h - 4))
+    mw = min(w, max(40, w - 6))
+    y0 = max(0, (h - mh) // 2)
+    x0 = max(0, (w - mw) // 2)
+
+    win = curses.newwin(mh, mw, y0, x0)
+    win.erase()
+    win.border()
+
+    header = f" promote: {title} "
+    win.addnstr(0, 2, header, mw - 4, curses.A_BOLD)
+
+    if running:
+        footer = f" running… ({elapsed:.1f}s) "
+    elif exit_code == 0:
+        footer = " exit 0 — Enter/q to close "
+    else:
+        reason = _PROMOTE_EXIT_MESSAGES.get(exit_code) if exit_code is not None else None
+        if reason:
+            footer = f" exit {exit_code} ({reason}) — Enter/q to close "
+        else:
+            footer = f" exit {exit_code} — Enter/q to close "
+    win.addnstr(mh - 1, 2, footer, mw - 4, curses.A_DIM)
+
+    inner_h = max(0, mh - 2)
+    inner_w = max(1, mw - 4)
+    wrapped = _wrap_lines(body, inner_w)
+    if running and not wrapped:
+        wrapped = ["(running cloude-promote — no output yet)"]
+    visible = wrapped[-inner_h:] if inner_h else []
+    for i, line in enumerate(visible):
+        win.addnstr(1 + i, 2, line, inner_w)
+
+    win.refresh()
+
+
+def _run_promote_modal(stdscr, idx: int, title: str) -> int:
+    """Run `bin/cloude-promote --select idx` and drive the modal loop.
+
+    Spawns the orchestrator with stderr merged into stdout (the chain
+    writes the summary block to stdout on success and the failure
+    block to stderr only on failure, never both in the same run, so
+    merging keeps ordering safe). The pipe fd is set non-blocking;
+    each ~50ms tick reads any available bytes, polls for exit, and
+    redraws. After exit + EOF the modal stays up until the user
+    presses Enter, q, or Esc. Keys during the run are dropped — the
+    chain mutates filesystem state mid-stride (clone, branch push,
+    draft PR, task-file render, staging.org edit, tmux session) and
+    there's no safe cancel point.
+    """
+    script = Path(__file__).resolve().parent / "cloude-promote"
+    proc = subprocess.Popen(
+        [str(script), "--select", str(idx)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+
+    buf = bytearray()
+    start = time.monotonic()
+    stdscr.timeout(_MODAL_RUN_TICK_MS)
+
+    return_code: int | None = None
+    eof = False
+
+    try:
+        while return_code is None or not eof:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                chunk = None
+            if chunk:
+                buf.extend(chunk)
+            elif chunk == b"":
+                eof = True
+
+            if return_code is None:
+                return_code = proc.poll()
+
+            _draw_promote_modal(
+                stdscr,
+                title=title,
+                body=buf.decode("utf-8", "replace"),
+                elapsed=time.monotonic() - start,
+                running=return_code is None,
+                exit_code=return_code,
+            )
+
+            try:
+                stdscr.getch()  # ignored while running; just paces the tick
+            except KeyboardInterrupt:
+                pass
+
+        _draw_promote_modal(
+            stdscr,
+            title=title,
+            body=buf.decode("utf-8", "replace"),
+            elapsed=time.monotonic() - start,
+            running=False,
+            exit_code=return_code,
+        )
+        # Block on key input now — no more polling needed. Use the
+        # main loop's idle timeout so an inotify-triggered redraw of
+        # the dashboard underneath still ticks at the normal cadence
+        # while we wait for dismissal.
+        stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+        while True:
+            try:
+                ch = stdscr.getch()
+            except KeyboardInterrupt:
+                break
+            if ch in (ord("q"), 27, curses.KEY_ENTER, 10, 13):
+                break
+    finally:
+        stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+        if proc.poll() is None:
+            proc.wait()
+
+    return return_code if return_code is not None else 1
+
 
 def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     """Promote the highlighted STAGING row via `bin/cloude-promote`.
@@ -430,11 +599,12 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     skip projects without `:REPO:` in the same order), so the
     1-based position is the `--select` index.
 
-    Curses is suspended for the subprocess so the orchestrator's
-    output streams to the terminal directly; on completion we wait
-    for the user to press Enter before redrawing. Returns a
+    The orchestrator's stdout/stderr stream into a curses modal
+    overlay that stays inside the dashboard — no endwin() flash. The
+    modal stays up after exit until Enter/q/Esc is pressed. Returns a
     status-line message describing the outcome (success or the
-    mapped exit-code blurb)."""
+    mapped exit-code blurb).
+    """
     if t.section != STAGING:
         return "(P: only works on STAGING rows)"
     try:
@@ -446,32 +616,11 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     if not script.exists():
         return f"(P: {script} not found)"
 
-    curses.endwin()
-    try:
-        result = subprocess.run([str(script), "--select", str(idx)])
-        # Pause so the user can read the orchestrator's summary before
-        # we redraw the dashboard over it.
-        if result.returncode == 0:
-            print("\nPromote succeeded. Press Enter to return to the dashboard.")
-        else:
-            print(
-                f"\nPromote failed (exit {result.returncode}). "
-                "Press Enter to return to the dashboard."
-            )
-        try:
-            input()
-        except EOFError:
-            pass
-    finally:
-        stdscr.clear()
-        stdscr.refresh()
-        curses.doupdate()
+    return_code = _run_promote_modal(stdscr, idx, t.title)
 
-    if result.returncode == 0:
+    if return_code == 0:
         return f"promoted: {t.title}"
-    msg = _PROMOTE_EXIT_MESSAGES.get(
-        result.returncode, f"exit {result.returncode}"
-    )
+    msg = _PROMOTE_EXIT_MESSAGES.get(return_code, f"exit {return_code}")
     return f"promote failed: {msg}"
 
 
@@ -652,7 +801,7 @@ def _run(stdscr) -> None:
         curses.init_pair(3, curses.COLOR_RED, -1)     # blocked
 
     watcher = _Watcher.create()
-    stdscr.timeout(500)  # getch() returns -1 after 500ms of no input
+    stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)  # getch() returns -1 after this many ms
 
     # Search state. `search_query` is the current filter substring; when
     # non-empty it filters the row list. `search_active` is True while
