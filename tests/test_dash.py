@@ -231,6 +231,43 @@ class TestTaskKey:
         assert dash._task_key(t1) == dash._task_key(t2)
 
 
+class TestWrapLines:
+    """`_wrap_lines` powers the promote-modal body renderer: it
+    flattens a streamed output buffer into rows that fit the modal's
+    inner width so `addnstr` can draw them without truncating at the
+    border. The behaviour is tiny but load-bearing — if it ever
+    truncates instead of wrapping, long paths in the orchestrator's
+    summary block stop being visible.
+    """
+
+    def test_short_lines_unchanged(self, dash):
+        assert dash._wrap_lines("abc\ndef", 10) == ["abc", "def"]
+
+    def test_empty_lines_preserved(self, dash):
+        assert dash._wrap_lines("a\n\nb", 10) == ["a", "", "b"]
+
+    def test_long_line_hard_wraps(self, dash):
+        assert dash._wrap_lines("abcdefghij", 4) == ["abcd", "efgh", "ij"]
+
+    def test_mixed_wrap_and_short(self, dash):
+        result = dash._wrap_lines("hello\nworldwide", 5)
+        assert result == ["hello", "world", "wide"]
+
+    def test_empty_input_yields_one_empty_line(self, dash):
+        # split("\n") on "" returns [""], which preserves a single
+        # empty row — important for the modal's "no output yet"
+        # branch to know it has zero real content.
+        assert dash._wrap_lines("", 10) == [""]
+
+    def test_zero_width_returns_empty(self, dash):
+        # Defensive: a degenerate width should not loop forever.
+        assert dash._wrap_lines("abc", 0) == []
+
+    def test_exact_width_no_wrap(self, dash):
+        # A line exactly at the width fits on one row (no spillover).
+        assert dash._wrap_lines("abcd", 4) == ["abcd"]
+
+
 class TestFlatten:
     def test_filters_to_matching_titles_and_drops_empty_sections(
         self, dash, tmp_path
@@ -266,3 +303,132 @@ class TestFlatten:
         # ACTIVE, STAGING, RECENT each get a header + EMPTY row.
         headers = [v for kind, v in rows if kind == dash.ROW_HEADER]
         assert headers == ["ACTIVE (0)", "STAGING (0)", "RECENT (0)"]
+
+
+class TestFinalizeOverrides:
+    """The exit-code → (prompt, flag) table the `f` key uses to walk
+    the override-able failures from `bin/cloude-finalize-cleanup`.
+
+    The contract this test locks in is twofold:
+
+    * Codes 12 / 13 / 14 each map to the matching `--force-worktree` /
+      `--skip-volume` / `--force-root` flag — the same overrides
+      `/finalize`'s skill walks the user through. If
+      cloude-finalize-cleanup's exit-code table changes, this test
+      should fail loudly so the dashboard mapping stays in sync.
+    * Code 10 (PR not MERGED) is intentionally absent — it's a hard
+      fail with no retry on the dashboard, same as in `/finalize`.
+    """
+
+    def test_maps_exit_codes_to_matching_flags(self, dash):
+        assert dash._FINALIZE_OVERRIDES[12][1] == "--force-worktree"
+        assert dash._FINALIZE_OVERRIDES[13][1] == "--skip-volume"
+        assert dash._FINALIZE_OVERRIDES[14][1] == "--force-root"
+
+    def test_does_not_cover_hard_fail_exit_codes(self, dash):
+        # 10 (PR not MERGED) and 11 (non-terminal, --force-drop not
+        # given) must never appear here — both are non-retryable from
+        # the dashboard side.
+        assert 10 not in dash._FINALIZE_OVERRIDES
+        assert 11 not in dash._FINALIZE_OVERRIDES
+
+    def test_prompts_are_y_n_questions(self, dash):
+        # The prompts are rendered in the finalize modal's footer and
+        # answered via `_modal_read_yn` (y/Y → True; n/N/Esc/q/Enter →
+        # False) — keep them in the same shape so the user always
+        # knows what they're answering.
+        for code, (prompt, _flag) in dash._FINALIZE_OVERRIDES.items():
+            assert "[y/N]" in prompt, f"exit {code}: {prompt!r}"
+
+    def test_override_codes_also_appear_in_exit_messages(self, dash):
+        # Every override-able code must also have a human-readable
+        # label in _FINALIZE_EXIT_MESSAGES — the modal uses that label
+        # when the user answers N to the override prompt and we render
+        # the final "finalize failed: <reason>" status line. If the two
+        # tables drift, the failure-side copy would silently fall back
+        # to `exit N` for codes the user actually saw a prompt for.
+        for code in dash._FINALIZE_OVERRIDES:
+            assert code in dash._FINALIZE_EXIT_MESSAGES, (
+                f"override code {code} missing from _FINALIZE_EXIT_MESSAGES"
+            )
+
+
+class TestFinalizeExitMessages:
+    """`_FINALIZE_EXIT_MESSAGES` powers the finalize modal's
+    `exit N (reason) — Enter/q to close` footer and the dashboard's
+    `finalize failed: <reason>` status-line copy. The reasons are
+    sourced from `bin/cloude-finalize-cleanup`'s usage block; if a
+    new exit code is added there without a matching entry here, the
+    modal silently falls back to a bare `exit N` footer.
+    """
+
+    # Every exit code documented in cloude-finalize-cleanup's usage
+    # block as of this commit. Drives the completeness check below.
+    _DOCUMENTED_CODES = frozenset(
+        {10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 25, 26, 30}
+    )
+
+    def test_covers_every_documented_exit_code(self, dash):
+        missing = self._DOCUMENTED_CODES - dash._FINALIZE_EXIT_MESSAGES.keys()
+        assert not missing, (
+            f"_FINALIZE_EXIT_MESSAGES is missing entries for: {sorted(missing)}"
+        )
+
+    def test_does_not_invent_codes_not_in_the_script(self, dash):
+        extra = dash._FINALIZE_EXIT_MESSAGES.keys() - self._DOCUMENTED_CODES
+        assert not extra, (
+            f"_FINALIZE_EXIT_MESSAGES has codes not documented in "
+            f"cloude-finalize-cleanup: {sorted(extra)}"
+        )
+
+    def test_reasons_are_non_empty_strings(self, dash):
+        for code, reason in dash._FINALIZE_EXIT_MESSAGES.items():
+            assert isinstance(reason, str) and reason.strip(), (
+                f"exit {code} reason is empty: {reason!r}"
+            )
+
+
+class TestFinalizeStatusMessage:
+    """`_finalize_status_message` is the pure copy-generator the
+    dashboard's status line uses once the finalize modal dismisses.
+    Locks in the four user-visible outcomes."""
+
+    def test_success(self, dash):
+        msg = dash._finalize_status_message(
+            exit_code=0, aborted=False, title="my task"
+        )
+        assert msg == "finalized: my task"
+
+    def test_aborted_at_initial_force_drop(self, dash):
+        # Initial force-drop-N path: no subprocess ran, so exit_code
+        # is 0 but aborted is True.
+        msg = dash._finalize_status_message(
+            exit_code=0, aborted=True, title="my task"
+        )
+        assert msg == "finalize aborted"
+
+    def test_aborted_at_override_prompt(self, dash):
+        # User answered N to an override prompt after a non-zero exit
+        # (e.g. 12 / 13 / 14). Status line still reads "aborted" so
+        # it reflects the user choice rather than blaming the exit
+        # code the override would have papered over.
+        msg = dash._finalize_status_message(
+            exit_code=12, aborted=True, title="my task"
+        )
+        assert msg == "finalize aborted"
+
+    def test_failure_uses_mapped_reason(self, dash):
+        # An exit code present in _FINALIZE_EXIT_MESSAGES is rendered
+        # with the human label.
+        msg = dash._finalize_status_message(
+            exit_code=10, aborted=False, title="my task"
+        )
+        assert msg == "finalize failed: PR not MERGED"
+
+    def test_failure_falls_back_to_bare_exit_code(self, dash):
+        # An unmapped exit code (shouldn't happen in practice, but
+        # cheap to guard) renders as `exit N`.
+        msg = dash._finalize_status_message(
+            exit_code=99, aborted=False, title="my task"
+        )
+        assert msg == "finalize failed: exit 99"

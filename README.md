@@ -139,7 +139,7 @@ stage, each tagged with who currently has the ball — `:agent:`,
 labelled with the repo it belongs to:
 
 ```text
-cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  P promote  r reload  q quit
+cloude tasks      ↑/↓ move  p PR  t tmux  c copy slug  P promote  f finalize  r reload  q quit
 
 ACTIVE (4)
   MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
@@ -174,14 +174,18 @@ session are all named after — to the system clipboard, ready to paste
 into a command.
 
 Press `P` on a highlighted STAGING row to promote it without leaving
-the dashboard. Curses suspends, `bin/cloude-promote` runs the full
-chain (gh discovery + worktree + draft PR + tmux session), and the
-dashboard returns once you press Enter. The new ACTIVE row shows up
-on the next reload; press `t` on it to attach to the new task's tmux
-session.
+the dashboard. `bin/cloude-promote` runs the full chain (gh discovery
++ worktree + draft PR + tmux session) and its stdout/stderr stream
+live into a centered modal overlay drawn over the dashboard — the
+underlying rows stay visible at the margins. The modal shows a
+`running… (Ns)` footer while the chain is in flight and sticks around
+on completion with the full output (PR URL, task-file path, etc.) and
+an `exit <N> — Enter/q to close` footer; `Enter`, `q`, or `Esc`
+dismisses it. The new ACTIVE row shows up on the next reload; press
+`t` on it to attach to the new task's tmux session.
 
 ```sh
-bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
+bin/cloude-dash    # /: search · p: PR · t: switch to task · c: copy slug · f: finalize · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
@@ -362,7 +366,10 @@ optional properties drawer with `:ADOPT:`, `:COMPANION:`, and/or
   shorter or otherwise different slug. The slug is what the task
   file (`tasks/active/YYYY-MM-DD-<slug>.org`), the feature branch
   (`cloude/<slug>`), the worktree, and the tmux session
-  (`cloude-<slug>`) are all named after.
+  (`cloude-<slug>`) are all named after. Normally set automatically
+  by the staging-slug watcher (see [Slug suggestions](#slug-suggestions)
+  below), but you can hand-edit it too — a user-set `:SLUG:` is
+  preserved on subsequent watcher runs.
 
 All are optional; `/promote` reads them from the staging idea and
 forwards them via flags to the orchestrator. Heading text is never
@@ -404,6 +411,59 @@ falling back to a default `TODO` section. `/promote` skips them:
 
 You can delete TODOs when finished — there's no separate
 "completed" pile for them.
+
+### Slug suggestions
+
+By default, `/promote` derives a task's filesystem slug from the
+staging idea heading mechanically: lowercase, replace non-alphanumerics
+with `-`, collapse repeats. That works for short headings
+(`"Hook to auto-move COMPLETE files"` → `hook-to-auto-move-complete-files`)
+but produces unwieldy slugs for verbose ones.
+
+cloude ships a small background watcher that uses the host claude
+session itself to suggest concise slugs, written back as a `:SLUG:`
+property on each staging idea. Once an idea has a `:SLUG:`,
+`/promote` proposes that slug instead of the mechanical fallback
+(still asking you to confirm or override).
+
+The watcher is:
+
+- **Auto-armed** on every host claude session started in the cloude
+  repo, via a `SessionStart` hook in
+  [`.claude/settings.json`](.claude/settings.json) that nudges
+  claude to call the [`/suggest-slugs-watch`](.claude/commands/suggest-slugs-watch.md)
+  slash command on its first turn. The slash command in turn arms a
+  persistent `Monitor` that runs
+  [`bin/cloude-watch-staging-slugs`](bin/cloude-watch-staging-slugs).
+- **Singleton across sessions.** The watcher script holds a
+  non-blocking flock on `/tmp/cloude-watch-staging-slugs.lock`. In
+  one host session it runs normally; in additional concurrent
+  sessions arming is a near-no-op (the script logs to stderr and
+  exits). When the lock-holder session ends, recovery is either
+  opening a fresh host session (SessionStart re-fires) or running
+  `/suggest-slugs-watch` manually in any surviving session.
+- **Event-driven and cross-platform.** Uses the
+  [`watchdog`](https://pypi.org/project/watchdog/) library, which
+  picks the right OS primitive for native filesystem events
+  (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on
+  Windows). Each event triggers a re-check of
+  `bin/cloude-list-staging --slugless`. If there's any idea without
+  a `:SLUG:`, the watcher emits one notification line into the
+  chat, prompting the host claude to run
+  [`/suggest-slugs`](.claude/commands/suggest-slugs.md) — which
+  generates short kebab slugs for the slugless ideas and writes
+  them back via
+  [`bin/cloude-set-staging-slug`](bin/cloude-set-staging-slug).
+- **Idempotent.** A user-set `:SLUG:` is preserved (clobber-rejected);
+  an empty `:SLUG:` is the explicit "please suggest one" signal and
+  is replaced.
+
+No OS-level install step — `watchdog` is pinned in `pyproject.toml`
+and lands in `.venv-host/` on `make sync`. Set
+`CLOUDE_NO_SLUG_WATCH=1` in the environment to opt out entirely.
+
+You can also run `/suggest-slugs` manually at any time — the
+watcher isn't required for the on-demand path.
 
 ## Dashboard
 
@@ -451,13 +511,37 @@ the highlighted ACTIVE/RECENT task's slug to the clipboard, `P`
 promotes the highlighted STAGING idea via `bin/cloude-promote` (curses
 suspends for the run; press Enter to return), `r` reloads, `q` quits.
 
+Press `f` on a highlighted ACTIVE row to finalize the task via
+`bin/cloude-finalize-cleanup` — the same chain `/finalize` uses.
+`cloude-finalize-cleanup`'s stdout/stderr stream live into the same
+centered modal overlay the `P` key uses, so the dashboard rows stay
+visible at the margins and there's no `endwin()` flash. For a task
+already in `COMPLETE` or `DROPPED` the cleanup runs straight away
+(verify-or-close the PR, kill the tmux session, remove the worktree
+and DinD volume, delete the local branch on COMPLETE, move the task
+file out of `tasks/active/`). For a task still in a non-terminal
+state, the modal first asks `Force-drop and finalize? [y/N]` in its
+footer; on `y` it runs the cleanup with `--force-drop`. The
+override-able exit codes (dirty worktree, in-use DinD volume,
+foreign-owned files, inaccessible PR on `COMPLETE`) prompt the
+matching y/N in the footer and
+re-run with the override flag, exactly as `/finalize` walks them —
+the buffer keeps output from both runs separated by a visible
+`--- rerunning with <flag> ---` line. The cleanup is also
+idempotent against already-absent resources: a missing tmux session,
+DinD volume, local branch, or worktree (directory and/or git
+bookkeeping) is reported as `absent` in the summary rather than
+failing, so re-running finalize on a partially-cleaned-up task is
+safe. `Enter`, `q`, or `Esc` dismisses the modal when the run
+finishes.
+
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title
 contains the query (case-insensitive substring), and surviving section
 headers show `(matched/total)` so you can see what's been filtered out.
 `↑`/`↓` still navigate the filtered list while typing. `Esc` clears
 the query and exits search mode; `Enter` locks the filter, restoring
-the normal keymap (`j`/`k`/`p`/`t`/`c`/`P`/`g`/`G`/`r`) over the
+the normal keymap (`j`/`k`/`p`/`t`/`c`/`P`/`f`/`g`/`G`/`r`) over the
 filtered set — `Esc` while locked clears the filter, and `/` from a
 locked filter starts a fresh query.
 
@@ -550,6 +634,22 @@ you invoke by hand:
   `tasks/dropped/`. Force-drop is allowed from any non-terminal
   state; force-complete is not (COMPLETE requires the agent to have
   verified the merge).
+- **`/suggest-slugs-watch`** — Arm the staging-slug watcher in this
+  host session. Calls the `Monitor` tool with
+  `bin/cloude-watch-staging-slugs`, then sits idle until the watcher
+  emits a `STAGING_HAS_SLUGLESS_IDEAS` notification, at which point
+  the host claude session runs `/suggest-slugs` automatically. The
+  host-side `.claude/settings.json` auto-arms this via SessionStart,
+  so normally you don't invoke it by hand — invoke it only to
+  re-arm after a lock-holder session ends (see [Slug
+  suggestions](#slug-suggestions)).
+- **`/suggest-slugs`** — Generate `:SLUG:` properties for any
+  `tasks/staging.org` ideas that don't have one. Runs `bin/cloude-list-staging
+  --slugless`, generates a short kebab-case slug per heading
+  in-turn (the host claude IS the LLM doing the generation), and
+  writes each back via `bin/cloude-set-staging-slug`. Skips
+  user-set slugs (clobber-protected). Fired automatically by the
+  watcher's notifications, but also runnable on demand.
 
 **In-container** (run from inside the task's tmux session):
 

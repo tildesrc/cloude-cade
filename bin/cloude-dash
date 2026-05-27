@@ -426,6 +426,452 @@ _PROMOTE_EXIT_MESSAGES = {
     43: "ADOPT PR is not OPEN / cross-repo / repo mismatch",
 }
 
+# Idle-tick timeout (ms) for the main getch() loop in _run(). The
+# promote modal's run loop drops it to a faster tick while the
+# subprocess streams output, then restores this value on the way out.
+_MAIN_LOOP_TIMEOUT_MS = 500
+_MODAL_RUN_TICK_MS = 50
+
+
+def _wrap_lines(text: str, width: int) -> list[str]:
+    """Split `text` on newlines, then hard-wrap each line to fit `width`.
+
+    Each input line is broken into one or more output lines, each at
+    most `width` characters. Empty lines are preserved. `width` must
+    be >= 1; the modal's inner-width calc guarantees that.
+    """
+    if width < 1:
+        return []
+    out: list[str] = []
+    for line in text.split("\n"):
+        if not line:
+            out.append("")
+            continue
+        while len(line) > width:
+            out.append(line[:width])
+            line = line[width:]
+        out.append(line)
+    return out
+
+
+def _draw_modal(
+    stdscr,
+    *,
+    title_prefix: str,
+    title: str,
+    body: str,
+    footer: str,
+    body_placeholder: str = "",
+) -> None:
+    """Draw a centered modal box over the dashboard.
+
+    Centered, bordered window sized to the terminal with a small
+    margin. Body tail-renders so the newest output is always visible.
+    The dashboard underneath is not erased — only the modal's mh*mw
+    cells are written, so the rows at the margins stay readable.
+
+    A fresh curses.newwin is built each call: cheap, and a clean way
+    to absorb terminal resizes that happen between ticks.
+
+    `body_placeholder` is shown only when `body` would otherwise
+    render zero non-empty lines — used while a subprocess hasn't
+    emitted output yet so the modal isn't visually empty.
+    """
+    h, w = stdscr.getmaxyx()
+    mh = min(h, max(10, h - 4))
+    mw = min(w, max(40, w - 6))
+    y0 = max(0, (h - mh) // 2)
+    x0 = max(0, (w - mw) // 2)
+
+    win = curses.newwin(mh, mw, y0, x0)
+    win.erase()
+    win.border()
+
+    header = f" {title_prefix}: {title} "
+    win.addnstr(0, 2, header, mw - 4, curses.A_BOLD)
+    win.addnstr(mh - 1, 2, footer, mw - 4, curses.A_DIM)
+
+    inner_h = max(0, mh - 2)
+    inner_w = max(1, mw - 4)
+    wrapped = _wrap_lines(body, inner_w)
+    if body_placeholder and not any(line for line in wrapped):
+        wrapped = [body_placeholder]
+    visible = wrapped[-inner_h:] if inner_h else []
+    for i, line in enumerate(visible):
+        win.addnstr(1 + i, 2, line, inner_w)
+
+    win.refresh()
+
+
+def _format_exit_footer(
+    exit_code: int | None, exit_messages: dict[int, str]
+) -> str:
+    """Footer text for a finished subprocess: `exit N (reason) — Enter/q
+    to close`, dropping the parenthetical when the code isn't mapped.
+    Returns the success footer when `exit_code` is 0."""
+    if exit_code == 0:
+        return " exit 0 — Enter/q to close "
+    reason = (
+        exit_messages.get(exit_code) if exit_code is not None else None
+    )
+    if reason:
+        return f" exit {exit_code} ({reason}) — Enter/q to close "
+    return f" exit {exit_code} — Enter/q to close "
+
+
+def _draw_promote_modal(
+    stdscr,
+    *,
+    title: str,
+    body: str,
+    elapsed: float,
+    running: bool,
+    exit_code: int | None,
+) -> None:
+    """Draw the promote modal over the dashboard.
+
+    Thin footer-and-placeholder wrapper over the generic `_draw_modal`.
+    """
+    if running:
+        footer = f" running… ({elapsed:.1f}s) "
+    else:
+        footer = _format_exit_footer(exit_code, _PROMOTE_EXIT_MESSAGES)
+    _draw_modal(
+        stdscr,
+        title_prefix="promote",
+        title=title,
+        body=body,
+        footer=footer,
+        body_placeholder=(
+            "(running cloude-promote — no output yet)" if running else ""
+        ),
+    )
+
+
+def _run_promote_modal(stdscr, idx: int, title: str) -> int:
+    """Run `bin/cloude-promote --select idx` and drive the modal loop.
+
+    Spawns the orchestrator with stderr merged into stdout (the chain
+    writes the summary block to stdout on success and the failure
+    block to stderr only on failure, never both in the same run, so
+    merging keeps ordering safe). The pipe fd is set non-blocking;
+    each ~50ms tick reads any available bytes, polls for exit, and
+    redraws. After exit + EOF the modal stays up until the user
+    presses Enter, q, or Esc. Keys during the run are dropped — the
+    chain mutates filesystem state mid-stride (clone, branch push,
+    draft PR, task-file render, staging.org edit, tmux session) and
+    there's no safe cancel point.
+    """
+    script = Path(__file__).resolve().parent / "cloude-promote"
+    proc = subprocess.Popen(
+        [str(script), "--select", str(idx)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+
+    buf = bytearray()
+    start = time.monotonic()
+    stdscr.timeout(_MODAL_RUN_TICK_MS)
+
+    return_code: int | None = None
+    eof = False
+
+    try:
+        while return_code is None or not eof:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                chunk = None
+            if chunk:
+                buf.extend(chunk)
+            elif chunk == b"":
+                eof = True
+
+            if return_code is None:
+                return_code = proc.poll()
+
+            _draw_promote_modal(
+                stdscr,
+                title=title,
+                body=buf.decode("utf-8", "replace"),
+                elapsed=time.monotonic() - start,
+                running=return_code is None,
+                exit_code=return_code,
+            )
+
+            try:
+                stdscr.getch()  # ignored while running; just paces the tick
+            except KeyboardInterrupt:
+                pass
+
+        _draw_promote_modal(
+            stdscr,
+            title=title,
+            body=buf.decode("utf-8", "replace"),
+            elapsed=time.monotonic() - start,
+            running=False,
+            exit_code=return_code,
+        )
+        # Block on key input now — no more polling needed. Use the
+        # main loop's idle timeout so an inotify-triggered redraw of
+        # the dashboard underneath still ticks at the normal cadence
+        # while we wait for dismissal.
+        stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+        while True:
+            try:
+                ch = stdscr.getch()
+            except KeyboardInterrupt:
+                break
+            if ch in (ord("q"), 27, curses.KEY_ENTER, 10, 13):
+                break
+    finally:
+        stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+        if proc.poll() is None:
+            proc.wait()
+
+    return return_code if return_code is not None else 1
+
+
+# Human-readable label per exit code documented in
+# bin/cloude-finalize-cleanup's usage block. Used by the finalize modal
+# to render `exit N (reason) — Enter/q to close` footers and to format
+# the status-line message after the modal is dismissed.
+_FINALIZE_EXIT_MESSAGES: dict[int, str] = {
+    10: "PR not MERGED",
+    11: "task not in terminal state",
+    12: "worktree dirty / locked",
+    13: "DinD volume in use",
+    14: "worktree has foreign-owned files",
+    15: "PR not accessible",
+    20: "gh pr close failed",
+    21: "task-file move failed",
+    22: "cloude-task-info failed",
+    23: "heading rewrite failed",
+    25: "worktree removal failed even with --force",
+    26: "root cleanup ran but worktree still present",
+    30: "argument validation",
+}
+
+
+# Exit codes from bin/cloude-finalize-cleanup that signal a judgment
+# call: the script bailed before the side effect, and rerunning with
+# the matching override flag retries it. Maps {exit_code: (prompt,
+# override_flag)}; the prompts mirror what /finalize's skill asks.
+_FINALIZE_OVERRIDES: dict[int, tuple[str, str]] = {
+    12: (
+        "Worktree is dirty / locked. Force-remove (discards changes)? [y/N] ",
+        "--force-worktree",
+    ),
+    13: (
+        "DinD volume is still in use. Skip volume cleanup? [y/N] ",
+        "--skip-volume",
+    ),
+    14: (
+        "Worktree has foreign-owned files. Nuke via 'docker run --user root'? [y/N] ",
+        "--force-root",
+    ),
+    15: (
+        "PR not accessible (gh pr view failed). Proceed with cleanup anyway? [y/N] ",
+        "--force-pr-absent",
+    ),
+}
+
+
+def _modal_read_yn(stdscr, redraw) -> bool:
+    """Block on stdscr until the user picks yes or no.
+
+    `redraw` is called once up-front so the prompt is visible before
+    the first getch. y/Y → True; n/N/Esc/q/Enter → False. Idle ticks
+    (the curses timeout firing without input) just cycle — the modal
+    contents aren't changing while we wait, matching the dismissal
+    loop in `_run_promote_modal`.
+    """
+    stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+    redraw()
+    while True:
+        try:
+            ch = stdscr.getch()
+        except KeyboardInterrupt:
+            return False
+        if ch == -1:
+            continue
+        if ch in (ord("y"), ord("Y")):
+            return True
+        if ch in (
+            ord("n"), ord("N"), ord("q"), 27,
+            curses.KEY_ENTER, 10, 13,
+        ):
+            return False
+
+
+def _modal_wait_dismiss(stdscr, redraw) -> None:
+    """Block on stdscr until the user dismisses the modal with q / Esc /
+    Enter. `redraw` is called once before blocking. Idle ticks cycle."""
+    stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+    redraw()
+    while True:
+        try:
+            ch = stdscr.getch()
+        except KeyboardInterrupt:
+            return
+        if ch == -1:
+            continue
+        if ch in (ord("q"), 27, curses.KEY_ENTER, 10, 13):
+            return
+
+
+def _run_finalize_modal(stdscr, t: "Task") -> tuple[int, bool]:
+    """Drive `bin/cloude-finalize-cleanup` inside the dashboard's modal.
+
+    Returns (exit_code, aborted). `aborted` is True iff the user
+    answered N to a y/N prompt (initial force-drop or any override);
+    on the initial-force-drop-N path no subprocess runs and exit_code
+    is 0.
+
+    Phases:
+      1. If `t.state` is non-terminal, show a brief explanation in the
+         body and `Force-drop and finalize? [y/N]` in the footer. On
+         N return (0, True). On y, queue `--force-drop` and proceed.
+      2. Spawn cloude-finalize-cleanup with the accumulated flag list;
+         stream stdout (stderr merged) into the shared buffer at the
+         _MODAL_RUN_TICK_MS cadence, redrawing each tick with a
+         `running… (Ns)` footer.
+      3. On exit 0 → success footer, wait for dismissal, return
+         (0, False).
+      4. On override-able exit (12/13/14) → prompt y/N; y appends the
+         flag and loops back to step 2 (with a separator written into
+         the buffer so the rerun boundary is visible); N → "aborted"
+         footer, dismiss, return (exit, True).
+      5. On any other non-zero exit → mapped reason in the footer,
+         dismiss, return (exit, False).
+    """
+    script = Path(__file__).resolve().parent / "cloude-finalize-cleanup"
+    buf = bytearray()
+    flags: list[str] = []
+
+    def render(footer: str, *, body_placeholder: str = "") -> None:
+        _draw_modal(
+            stdscr,
+            title_prefix="finalize",
+            title=t.title,
+            body=buf.decode("utf-8", "replace"),
+            footer=footer,
+            body_placeholder=body_placeholder,
+        )
+
+    # Phase 1: initial force-drop confirmation for non-terminal tasks.
+    if t.state not in TERMINAL_STATES:
+        explainer = (
+            f"Task is in {t.state or 'no'} state — not COMPLETE / DROPPED.\n"
+            "Finalizing will flip the heading TODO to DROPPED, close the "
+            "PR, and tear down the worktree / tmux session / DinD volume.\n"
+        )
+        buf.extend(explainer.encode())
+        if not _modal_read_yn(
+            stdscr, lambda: render(" Force-drop and finalize? [y/N] ")
+        ):
+            return 0, True
+        flags.append("--force-drop")
+        buf.extend(b"\n")
+
+    # Phases 2-5: subprocess + override loop.
+    last_code = 0
+    while True:
+        if last_code != 0:
+            # Re-running with the override appended just now. The
+            # separator marks the boundary in the accumulated buffer.
+            buf.extend(
+                f"--- rerunning with {flags[-1]} ---\n".encode()
+            )
+
+        proc = subprocess.Popen(
+            [str(script), str(t.path), *flags],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        fd = proc.stdout.fileno()
+        os.set_blocking(fd, False)
+
+        start = time.monotonic()
+        stdscr.timeout(_MODAL_RUN_TICK_MS)
+
+        return_code: int | None = None
+        eof = False
+        try:
+            while return_code is None or not eof:
+                try:
+                    chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    chunk = None
+                if chunk:
+                    buf.extend(chunk)
+                elif chunk == b"":
+                    eof = True
+
+                if return_code is None:
+                    return_code = proc.poll()
+
+                render(
+                    f" running… ({time.monotonic() - start:.1f}s) ",
+                    body_placeholder=(
+                        "(running cloude-finalize-cleanup — no output yet)"
+                    ),
+                )
+
+                try:
+                    stdscr.getch()
+                except KeyboardInterrupt:
+                    pass
+        finally:
+            if proc.poll() is None:
+                proc.wait()
+
+        last_code = return_code if return_code is not None else 1
+
+        if last_code == 0:
+            _modal_wait_dismiss(
+                stdscr,
+                lambda: render(
+                    " finalize succeeded — Enter/q to close "
+                ),
+            )
+            return 0, False
+
+        if last_code in _FINALIZE_OVERRIDES:
+            prompt, flag = _FINALIZE_OVERRIDES[last_code]
+            footer = f" {prompt}"
+            if _modal_read_yn(stdscr, lambda f=footer: render(f)):
+                if flag not in flags:
+                    flags.append(flag)
+                continue
+            _modal_wait_dismiss(
+                stdscr,
+                lambda: render(
+                    " finalize aborted — Enter/q to close "
+                ),
+            )
+            return last_code, True
+
+        footer = _format_exit_footer(last_code, _FINALIZE_EXIT_MESSAGES)
+        _modal_wait_dismiss(stdscr, lambda f=footer: render(f))
+        return last_code, False
+
+
+def _finalize_status_message(
+    *, exit_code: int, aborted: bool, title: str
+) -> str:
+    """Status-line copy for the dashboard's footer after the finalize
+    modal dismisses. Pure (no curses), so the table can be unit-tested
+    without driving the modal itself."""
+    if aborted:
+        return "finalize aborted"
+    if exit_code == 0:
+        return f"finalized: {title}"
+    reason = _FINALIZE_EXIT_MESSAGES.get(exit_code, f"exit {exit_code}")
+    return f"finalize failed: {reason}"
+
 
 def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     """Promote the highlighted STAGING row via `bin/cloude-promote`.
@@ -435,11 +881,12 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     skip projects without `:REPO:` in the same order), so the
     1-based position is the `--select` index.
 
-    Curses is suspended for the subprocess so the orchestrator's
-    output streams to the terminal directly; on completion we wait
-    for the user to press Enter before redrawing. Returns a
+    The orchestrator's stdout/stderr stream into a curses modal
+    overlay that stays inside the dashboard — no endwin() flash. The
+    modal stays up after exit until Enter/q/Esc is pressed. Returns a
     status-line message describing the outcome (success or the
-    mapped exit-code blurb)."""
+    mapped exit-code blurb).
+    """
     if t.section != STAGING:
         return "(P: only works on STAGING rows)"
     try:
@@ -451,33 +898,39 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     if not script.exists():
         return f"(P: {script} not found)"
 
-    curses.endwin()
-    try:
-        result = subprocess.run([str(script), "--select", str(idx)])
-        # Pause so the user can read the orchestrator's summary before
-        # we redraw the dashboard over it.
-        if result.returncode == 0:
-            print("\nPromote succeeded. Press Enter to return to the dashboard.")
-        else:
-            print(
-                f"\nPromote failed (exit {result.returncode}). "
-                "Press Enter to return to the dashboard."
-            )
-        try:
-            input()
-        except EOFError:
-            pass
-    finally:
-        stdscr.clear()
-        stdscr.refresh()
-        curses.doupdate()
+    return_code = _run_promote_modal(stdscr, idx, t.title)
 
-    if result.returncode == 0:
+    if return_code == 0:
         return f"promoted: {t.title}"
-    msg = _PROMOTE_EXIT_MESSAGES.get(
-        result.returncode, f"exit {result.returncode}"
-    )
+    msg = _PROMOTE_EXIT_MESSAGES.get(return_code, f"exit {return_code}")
     return f"promote failed: {msg}"
+
+
+def _finalize_task(stdscr, t: Task) -> str:
+    """Finalize the highlighted ACTIVE task via the modal-driven
+    `bin/cloude-finalize-cleanup` wrapper.
+
+    Pre-flight bails (wrong row kind, script missing) stay as
+    status-line returns — no point opening a modal just to close it.
+    Anything past that runs through `_run_finalize_modal`, which
+    handles the initial force-drop prompt, the subprocess streaming,
+    and the override y/N prompts. The status-line copy on dismissal
+    is computed by `_finalize_status_message`.
+    """
+    if t.section != ACTIVE:
+        return "(f: only works on ACTIVE rows)"
+
+    script = Path(__file__).resolve().parent / "cloude-finalize-cleanup"
+    if not script.exists():
+        return f"(f: {script} not found)"
+
+    try:
+        exit_code, aborted = _run_finalize_modal(stdscr, t)
+    finally:
+        stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
+    return _finalize_status_message(
+        exit_code=exit_code, aborted=aborted, title=t.title
+    )
 
 
 def _color(stdscr, tag: str) -> int:
@@ -494,7 +947,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  P promote  r reload  q quit"
+    hint = "↑/↓ move  / search  p PR  t tmux  c copy slug  P promote  f finalize  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -657,7 +1110,7 @@ def _run(stdscr) -> None:
         curses.init_pair(3, curses.COLOR_RED, -1)     # blocked
 
     watcher = _Watcher.create()
-    stdscr.timeout(500)  # getch() returns -1 after 500ms of no input
+    stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)  # getch() returns -1 after this many ms
 
     # Search state. `search_query` is the current filter substring; when
     # non-empty it filters the row list. `search_active` is True while
@@ -808,6 +1261,10 @@ def _run(stdscr) -> None:
                 # immediately even when watchers are absent.
                 if status.startswith("promoted: "):
                     rows, selected, _ = reload("reloaded")
+        elif ch == ord("f"):
+            if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
+                t: Task = rows[selected][1]  # type: ignore[assignment]
+                status = _finalize_task(stdscr, t)
 
 
 def main() -> int:

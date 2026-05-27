@@ -1,0 +1,94 @@
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+from __future__ import annotations
+__doc__ = """Write a `:SLUG:` property into a staging.org idea drawer.
+
+Usage:
+    cloude-set-staging-slug <heading-text> <slug>
+
+Locates the level-2 idea matching <heading-text> in `tasks/staging.org`
+and sets its `:SLUG:` property to <slug>, creating a properties drawer
+under the heading if absent. Used by the host-side `/suggest-slugs`
+slash command (which runs once the staging-slug watcher fires a
+notification) to write the host claude's generated slug back.
+
+Exit codes:
+    0   slug set (or no-op when the slug already matches).
+    2   missing argument / unparseable staging.org / heading not
+        found.
+    3   refusing to clobber: the idea already carries a different
+        non-empty `:SLUG:` value. User-set slugs win over the
+        generator.
+   30   malformed slug (must match `[a-z0-9][a-z0-9-]*[a-z0-9]`,
+        ≤ SLUG_MAX_LEN chars).
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# When invoked via the polyglot shebang, the script's directory is
+# stable (bin/), so the cloude root is its parent.
+CLOUDE_ROOT = Path(
+    os.environ.get("CLOUDE_ROOT") or Path(__file__).resolve().parent.parent
+)
+STAGING = CLOUDE_ROOT / "tasks" / "staging.org"
+
+sys.path.insert(0, str(CLOUDE_ROOT / "bin"))
+from cloude_org import (  # noqa: E402
+    SLUG_MAX_LEN,
+    SLUG_RE,
+    SlugClobberError,
+    set_idea_slug,
+)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        sys.stderr.write(
+            "usage: cloude-set-staging-slug <heading-text> <slug>\n"
+        )
+        return 2
+    heading, slug = argv
+
+    if not slug or len(slug) > SLUG_MAX_LEN or not SLUG_RE.match(slug):
+        sys.stderr.write(
+            f"cloude-set-staging-slug: malformed slug {slug!r} "
+            f"(want [a-z0-9][a-z0-9-]*[a-z0-9], ≤ {SLUG_MAX_LEN} chars)\n"
+        )
+        return 30
+
+    if not STAGING.exists():
+        sys.stderr.write(
+            f"cloude-set-staging-slug: no staging file at {STAGING}\n"
+        )
+        return 2
+
+    content = STAGING.read_text()
+    try:
+        new_content = set_idea_slug(content, heading, slug)
+    except SlugClobberError as exc:
+        sys.stderr.write(f"cloude-set-staging-slug: {exc}\n")
+        return 3
+    except ValueError as exc:
+        sys.stderr.write(f"cloude-set-staging-slug: {exc}\n")
+        return 2
+
+    if new_content == content:
+        # No-op — slug already matches. Stay silent on stdout so a
+        # caller iterating across many headings sees only the changes.
+        return 0
+
+    tmp = STAGING.with_suffix(STAGING.suffix + ".tmp")
+    tmp.write_text(new_content)
+    os.replace(tmp, STAGING)
+    print(f"set :SLUG: {slug} on {heading!r}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

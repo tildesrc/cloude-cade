@@ -217,6 +217,123 @@ def remove_staging_entry(content: str, heading_text: str) -> tuple[str, str]:
     return new_content, body_text
 
 
+# Validation for slug values written into staging-idea drawers via
+# `set_idea_slug` / `bin/cloude-set-staging-slug`. Same shape `/promote`
+# expects: starts and ends with [a-z0-9], hyphens allowed in the middle.
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+SLUG_MAX_LEN = 80
+
+
+class SlugClobberError(ValueError):
+    """Raised by `set_idea_slug` when an existing `:SLUG:` would be overwritten.
+
+    The watcher / `/suggest-slugs` flow never overwrites a slug the user
+    has hand-edited: an idea with `:SLUG:` set to something other than
+    the empty string (which means "please suggest one") wins over the
+    LLM-generated suggestion. An empty existing `:SLUG:` is *replaced*,
+    not clobbered.
+    """
+
+
+def set_idea_slug(content: str, heading_text: str, slug: str) -> str:
+    """Set the `:SLUG:` property on a level-2 idea heading.
+
+    `heading_text` matches the same way as `remove_staging_entry`:
+    against the heading text without its tag chain, exact match after
+    `strip()`. Returns new file content, or `content` unchanged when
+    the idea already carries the same slug.
+
+    Behavior matrix:
+    - No drawer under the heading → insert one with `:SLUG: <slug>`
+      using a 3-space indent (the README convention for level-2
+      idea drawers).
+    - Drawer present, no `:SLUG:` line → insert one just before
+      `:END:`, matching the drawer's existing indent.
+    - Drawer present, empty `:SLUG:` (the "please suggest" sentinel) →
+      replace with `<slug>`.
+    - Drawer present, `:SLUG: <slug>` already → no-op.
+    - Drawer present, `:SLUG: <other>` → raise `SlugClobberError`.
+
+    Raises `ValueError` when no level-2 heading matches `heading_text`.
+    """
+    root = _load_org(content)
+    nodes = list(root[1:])
+    target_idx: int | None = None
+    for i, node in enumerate(nodes):
+        if node.level == 2 and str(node.heading).strip() == heading_text.strip():
+            target_idx = i
+            break
+    if target_idx is None:
+        raise ValueError(f"heading not found: {heading_text!r}")
+
+    target = nodes[target_idx]
+    start_lineno = target.linenumber  # 1-based, points at `** …`
+
+    end_lineno: int | None = None
+    for node in nodes[target_idx + 1:]:
+        if node.level <= 2:
+            end_lineno = node.linenumber
+            break
+
+    lines = content.splitlines(keepends=True)
+    if end_lineno is None:
+        end_lineno = len(lines) + 1
+
+    heading_idx = start_lineno - 1  # 0-based index of the `** …` line
+    body_slice = slice(heading_idx + 1, end_lineno - 1)
+    body_lines = lines[body_slice]
+
+    # Drawer must be the first non-blank thing under the heading.
+    j = 0
+    while j < len(body_lines) and body_lines[j].strip() == "":
+        j += 1
+    drawer_open_local: int | None = None
+    drawer_end_local: int | None = None
+    if j < len(body_lines) and body_lines[j].strip().upper() == ":PROPERTIES:":
+        drawer_open_local = j
+        for k in range(j + 1, len(body_lines)):
+            if body_lines[k].strip().upper() == ":END:":
+                drawer_end_local = k
+                break
+
+    if drawer_open_local is not None and drawer_end_local is not None:
+        # Drawer found. Look for an existing :SLUG: line.
+        for li in range(drawer_open_local + 1, drawer_end_local):
+            m = re.match(r"^(\s*):SLUG:\s*(.*?)\s*$", body_lines[li])
+            if m is None:
+                continue
+            existing = m.group(2).strip()
+            if existing == slug:
+                return content
+            if existing == "":
+                indent = m.group(1)
+                rewritten = f"{indent}:SLUG: {slug}\n"
+                abs_idx = heading_idx + 1 + li
+                new_lines = lines[:abs_idx] + [rewritten] + lines[abs_idx + 1:]
+                return "".join(new_lines)
+            raise SlugClobberError(
+                f"idea {heading_text!r} already has :SLUG: {existing!r}; "
+                f"refusing to overwrite with {slug!r}"
+            )
+        # No :SLUG: in drawer — insert before :END: with the drawer's indent.
+        indent_match = re.match(r"^(\s*)", body_lines[drawer_open_local])
+        indent = indent_match.group(1) if indent_match else "   "
+        new_line = f"{indent}:SLUG: {slug}\n"
+        abs_end = heading_idx + 1 + drawer_end_local
+        new_lines = lines[:abs_end] + [new_line] + lines[abs_end:]
+        return "".join(new_lines)
+
+    # No drawer — synthesise one immediately under the heading.
+    indent = "   "
+    new_drawer = (
+        f"{indent}:PROPERTIES:\n"
+        f"{indent}:SLUG: {slug}\n"
+        f"{indent}:END:\n"
+    )
+    new_lines = lines[: heading_idx + 1] + [new_drawer] + lines[heading_idx + 1:]
+    return "".join(new_lines)
+
+
 def render_task_from_template(
     template_text: str,
     *,
