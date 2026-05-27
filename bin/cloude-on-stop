@@ -92,15 +92,16 @@ from cloude_org import (  # noqa: E402
     latest_log_entry,
     parse_heading,
 )
+from cloude_stages import auto_handback, in_flight  # noqa: E402
 
 # In-flight stages — the terminal COMPLETE / DROPPED states get neither
 # a tag flip nor a DoD reminder.
-IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+IN_FLIGHT = in_flight()
 
 # Stages whose `:agent:` tag is flipped to `:user:` at end of turn.
 # REVIEW sits at `:blocked:` by default and MERGING is agent-driven
 # (`/babysit-merge` owns its tag), so neither is auto-handed-back.
-AUTO_HANDBACK = ("PLANNING", "ITERATING")
+AUTO_HANDBACK = auto_handback()
 
 # Babysit-loop state files, relative to the worktree. The skills create
 # them on start and delete them on clean exit / bail; their presence

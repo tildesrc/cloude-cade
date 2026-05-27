@@ -73,8 +73,9 @@ from pathlib import Path
 # venv story).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import ball_tag, parse_heading  # noqa: E402
+from cloude_stages import in_flight  # noqa: E402
 
-IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+IN_FLIGHT = in_flight()
 
 # (phase -> (current ball tag that triggers a flip, target tag, human label))
 PHASES = {

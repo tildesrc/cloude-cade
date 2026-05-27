@@ -39,16 +39,21 @@ except ModuleNotFoundError:
 CLOUDE_ROOT = Path(__file__).resolve().parent.parent
 TASKS = CLOUDE_ROOT / "tasks"
 
+# The workflow stage model is shared with the hook scripts via the
+# sibling `cloude_stages` module — keep the keyword list / dashboard
+# ordering / terminal subset / ball-tag priority in one place.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_stages import BALL_TAGS, dashboard_order_map, terminal  # noqa: E402
+
 ACTIVE = "ACTIVE"
 STAGING = "STAGING"
 TODO = "TODO"
 RECENT = "RECENT"
 
-STAGE_ORDER = {"MERGING": 0, "REVIEW": 1, "ITERATING": 2, "PLANNING": 3}
-BALL_TAGS = ("agent", "user", "blocked")
+STAGE_ORDER = dashboard_order_map()
 # Terminal TODO keywords: a task in one of these is done, so its
 # who-has-the-ball tag is stale noise and is not drawn.
-TERMINAL_STATES = frozenset({"COMPLETE", "DROPPED"})
+TERMINAL_STATES = frozenset(terminal())
 RECENT_LIMIT = 20
 
 

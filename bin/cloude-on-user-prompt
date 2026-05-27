@@ -49,9 +49,10 @@ from pathlib import Path
 # the polyglot shebang above (see docs/internals.md).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_org import ball_tag, parse_heading  # noqa: E402
+from cloude_stages import in_flight  # noqa: E402
 
 # In-flight stages — the terminal COMPLETE / DROPPED states are skipped.
-IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
+IN_FLIGHT = in_flight()
 
 
 def main() -> int:

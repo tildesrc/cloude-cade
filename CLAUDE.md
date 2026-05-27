@@ -174,9 +174,10 @@ in-container agent.
 
 **Definition of done**
 - The task file has TODO state `COMPLETE` and tag `:user:`.
-- (The host-side `/finalize` then moves the file to
-  `tasks/completed/`, kills the tmux session, removes the worktree,
-  and deletes the local branch.)
+
+The host-side `/finalize` then moves the file to `tasks/completed/`,
+kills the tmux session, removes the worktree, and deletes the local
+branch.
 
 #### DROPPED (terminal)
 
@@ -189,10 +190,11 @@ happen from the host via `/finalize`.
 
 **Definition of done**
 - The task file has TODO state `DROPPED` and tag `:user:`.
-- (The host-side `/finalize` then closes the PR, moves the file to
-  `tasks/dropped/`, kills the tmux session, and removes the worktree.
-  The local branch is preserved on DROPPED in case you want to
-  revisit.)
+
+The host-side `/finalize` then closes the PR, moves the file to
+`tasks/dropped/`, kills the tmux session, and removes the worktree.
+The local branch is preserved on DROPPED in case you want to
+revisit.
 
 #### Per-stage tag defaults
 
@@ -275,10 +277,14 @@ verdict is `PASS` / `UNSATISFIABLE` — so the agent's organic
 end-of-turn message stays as the visible last content on every
 happy path.
 
-The per-stage DoD bullets live in code at `bin/cloude_org.STAGE_DOD`
-(consumed by the skeleton generator and the hook) and are mirrored
-in the *Stage details* section above as the human-facing copy. Edit
-both when a bullet changes.
+The per-stage DoD bullets live in `bin/cloude_stages.WORKFLOW`
+(consumed by the skeleton generator and the hook via
+`bin/cloude_org.STAGE_DOD`'s read-only re-export, and by the
+`/advance` skill via `bin/cloude-stages dod <STAGE>`). The *Stage
+details* section above is the human-facing reference; agents
+evaluate against the CLI, not against this prose, so prose drift
+is a documentation lag rather than a correctness bug — but please
+keep them aligned anyway.
 
 ### Who-has-the-ball tag
 

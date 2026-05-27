@@ -58,55 +58,47 @@ from pathlib import Path
 
 import orgparse
 
-# The who-has-the-ball tags, in priority order — see CLAUDE.md's
-# "Who-has-the-ball tag" section.
-BALL_TAGS = ("agent", "user", "blocked")
+# The workflow stage model — keyword list, per-stage DoD bullets,
+# who-has-the-ball tag defaults, transition map — lives in the
+# sibling `cloude_stages` module so every consumer (this module, the
+# hook scripts, the dashboard, the slash commands via the
+# `cloude-stages` CLI) derives from one place. STAGE_KEYWORDS /
+# STAGE_DOD / BALL_TAGS / PLAN_APPROVED_BULLET are re-exported here
+# for back-compat with existing importers; new code should import
+# directly from `cloude_stages`.
+from types import MappingProxyType  # noqa: E402
 
-# The two file-level TODO sequences this module knows about.
-STAGE_KEYWORDS = ("PLANNING", "ITERATING", "REVIEW", "MERGING", "COMPLETE", "DROPPED")
+from cloude_stages import (  # noqa: E402
+    BALL_TAGS,
+    PLAN_APPROVED_BULLET,
+    WORKFLOW,
+    in_flight as _stages_in_flight,
+    keyword_list as _stages_keyword_list,
+    terminal as _stages_terminal,
+)
+
+# The cloude stage-keyword sequence, in workflow order. Re-exported
+# from `cloude_stages.keyword_list()`.
+STAGE_KEYWORDS: tuple[str, ...] = _stages_keyword_list()
+
+# DoD-verdict keywords for the secondary `#+TODO:` sequence inside
+# the per-stage `** Log` entries. Kept here (not in `cloude_stages`)
+# because it's tied to the log-entry schema this module owns, not to
+# the workflow itself.
 DOD_KEYWORDS = ("PENDING", "UNSATISFIABLE", "PASS")
 
-# Per-stage Definition-of-Done bullets. The skeleton-appender seeds
-# one `- [ ]` checkbox per bullet under `**** [/] PENDING DoD`, and
-# `cloude-on-stop` cross-checks the checkbox count against the verdict.
-#
-# CLAUDE.md (Stage details → <stage> → Definition of done) mirrors
-# these bullets as the human-facing copy. If you edit a bullet here,
-# edit CLAUDE.md to match.
-STAGE_DOD: dict[str, tuple[str, ...]] = {
-    "PLANNING": (
-        "The plan is written into the task's org file.",
-        "The user has approved the plan.",
-        "A draft PR has been created on GitHub.",
-    ),
-    "ITERATING": (
-        "The plan is implemented in code.",
-        "All user requests are implemented in code.",
-        "New and relevant tests pass locally.",
-        "Changes are committed and pushed.",
-        "CI tests are passing, or any failures can be attributed to irrelevant flakes.",
-        "The PR title and description on GitHub reflect the final change.",
-    ),
-    "REVIEW": (
-        "The PR has been reviewed.",
-    ),
-    "MERGING": (
-        "The PR is merged.",
-    ),
-    "COMPLETE": (
-        "The merge has landed and the task is finished.",
-    ),
-    "DROPPED": (
-        "The task has been intentionally abandoned.",
-    ),
-}
+# Per-stage Definition-of-Done bullets. Read-only view onto the
+# `cloude_stages.WORKFLOW` registry so callers indexing
+# `STAGE_DOD["ITERATING"]` keep working. The bullets are owned by
+# `cloude_stages`; CLAUDE.md's "Stage details" sections mirror them
+# as human-facing reference prose. Machine consumers — this map and
+# `/advance` via `bin/cloude-stages dod <STAGE>` — all read from the
+# model directly, so CLAUDE.md drift is a documentation lag rather
+# than a correctness bug.
+STAGE_DOD: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
+    {s.name: s.dod_bullets for s in WORKFLOW}
+)
 
-# The canonical text of the PLANNING DoD bullet that records the user's
-# approval of the plan. `mark_plan_approved` matches against this exact
-# string so it can be ticked automatically when the user triggers any
-# transition out of PLANNING (the trigger itself is the approval). Kept
-# as a derived constant so it can't drift from STAGE_DOD.
-PLAN_APPROVED_BULLET = STAGE_DOD["PLANNING"][1]
 
 def _org_env(filename: str = "<cloude-task>") -> orgparse.OrgEnv:
     """Return an `OrgEnv` preloaded with the cloude TODO keywords.
@@ -119,8 +111,8 @@ def _org_env(filename: str = "<cloude-task>") -> orgparse.OrgEnv:
     list keeps `node.todo` reliable across both.
     """
     return orgparse.OrgEnv(
-        todos=list(STAGE_KEYWORDS[:4]),  # PLANNING / ITERATING / REVIEW / MERGING
-        dones=list(STAGE_KEYWORDS[4:]),  # COMPLETE / DROPPED
+        todos=list(_stages_in_flight()),  # PLANNING / ITERATING / REVIEW / MERGING
+        dones=list(_stages_terminal()),   # COMPLETE / DROPPED
         filename=filename,
     )
 

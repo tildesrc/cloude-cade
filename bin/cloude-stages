@@ -1,0 +1,181 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+# Read-only CLI over the cloude_stages workflow model.
+#
+# Used by slash commands (especially /advance) and by bash helpers
+# that need to ask "what's next?", "what's the default tag?", "what
+# are the DoD bullets for stage X?" without re-declaring the model.
+# All output is plain newline-delimited text — no JSON, no shell-
+# quoting needed for the common cases.
+#
+# Subcommands:
+#   next <STAGE> [--skip-review]
+#       Print the next forward stage keyword for <STAGE>. Empty when
+#       <STAGE> is terminal. With --skip-review, ITERATING goes
+#       directly to MERGING (the REVIEW-skip rule from /advance).
+#       Exit codes: 0 success, 2 unknown stage.
+#
+#   list [--in-flight | --terminal | --auto-handback | --all]
+#       Print one keyword per line. --all is the default; the subset
+#       flags are mutually exclusive.
+#       Exit codes: 0 success.
+#
+#   default-tag <STAGE>
+#       Print the per-stage default heading tag (agent / user /
+#       blocked / empty).
+#       Exit codes: 0 success, 2 unknown stage.
+#
+#   dod <STAGE>
+#       Print the Definition-of-Done bullets for <STAGE>, one per
+#       line.
+#       Exit codes: 0 success, 2 unknown stage.
+#
+#   todo-directive
+#       Print the canonical `#+TODO:` line task files carry. The
+#       drift test asserts tasks/TEMPLATE.org matches this exactly.
+#       Exit codes: 0 success.
+#
+#   starting-stage <MODE>
+#       Print the initial stage keyword for a freshly-promoted task.
+#       MODE is `standard` (start in PLANNING) or `adopt` (start in
+#       ITERATING). Used by bin/cloude-promote-setup.
+#       Exit codes: 0 success, 2 unknown mode.
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# The model lives next to this script.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_stages import (  # noqa: E402
+    BY_NAME,
+    auto_handback,
+    default_tag,
+    dod_for,
+    in_flight,
+    keyword_list,
+    next_stage,
+    starting_stage,
+    terminal,
+    todo_directive,
+)
+
+
+def _check_stage(name: str) -> int:
+    """Return exit code 2 with stderr message if `name` is unknown, else 0."""
+    if name not in BY_NAME:
+        sys.stderr.write(
+            f"cloude-stages: unknown stage: {name!r}\n"
+            f"  expected one of: {', '.join(keyword_list())}\n"
+        )
+        return 2
+    return 0
+
+
+def cmd_next(args: argparse.Namespace) -> int:
+    rc = _check_stage(args.stage)
+    if rc:
+        return rc
+    nxt = next_stage(args.stage, skip_review=args.skip_review)
+    if nxt is not None:
+        print(nxt)
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    if args.in_flight:
+        names = in_flight()
+    elif args.terminal:
+        names = terminal()
+    elif args.auto_handback:
+        names = auto_handback()
+    else:
+        names = keyword_list()
+    for n in names:
+        print(n)
+    return 0
+
+
+def cmd_default_tag(args: argparse.Namespace) -> int:
+    rc = _check_stage(args.stage)
+    if rc:
+        return rc
+    print(default_tag(args.stage))
+    return 0
+
+
+def cmd_dod(args: argparse.Namespace) -> int:
+    rc = _check_stage(args.stage)
+    if rc:
+        return rc
+    for bullet in dod_for(args.stage):
+        print(bullet)
+    return 0
+
+
+def cmd_todo_directive(args: argparse.Namespace) -> int:
+    print(todo_directive())
+    return 0
+
+
+def cmd_starting_stage(args: argparse.Namespace) -> int:
+    try:
+        print(starting_stage(args.mode))
+    except ValueError as exc:
+        sys.stderr.write(f"cloude-stages: {exc}\n")
+        return 2
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cloude-stages",
+        description="Read-only CLI over the cloude_stages workflow model.",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_next = sub.add_parser("next", help="Print the next forward stage.")
+    p_next.add_argument("stage")
+    p_next.add_argument(
+        "--skip-review", action="store_true",
+        help="ITERATING goes directly to MERGING.",
+    )
+    p_next.set_defaults(func=cmd_next)
+
+    p_list = sub.add_parser("list", help="Print stage keywords, one per line.")
+    grp = p_list.add_mutually_exclusive_group()
+    grp.add_argument("--in-flight", action="store_true")
+    grp.add_argument("--terminal", action="store_true")
+    grp.add_argument("--auto-handback", action="store_true")
+    grp.add_argument("--all", action="store_true")
+    p_list.set_defaults(func=cmd_list)
+
+    p_tag = sub.add_parser("default-tag", help="Print the per-stage default heading tag.")
+    p_tag.add_argument("stage")
+    p_tag.set_defaults(func=cmd_default_tag)
+
+    p_dod = sub.add_parser("dod", help="Print the DoD bullets for a stage.")
+    p_dod.add_argument("stage")
+    p_dod.set_defaults(func=cmd_dod)
+
+    p_td = sub.add_parser("todo-directive", help="Print the canonical #+TODO: line.")
+    p_td.set_defaults(func=cmd_todo_directive)
+
+    p_ss = sub.add_parser(
+        "starting-stage",
+        help="Print the initial stage keyword for a freshly-promoted task.",
+    )
+    p_ss.add_argument("mode", help="standard | adopt")
+    p_ss.set_defaults(func=cmd_starting_stage)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

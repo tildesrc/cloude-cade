@@ -23,7 +23,7 @@ Flip the heading with the shared helper:
 "$CLOUDE_ROOT/bin/cloude-task-set-state" "$CLOUDE_TASK_FILE" --todo DROPPED --tag <tag>
 ```
 
-`<tag>` is `user` (the per-stage default for DROPPED — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed to `/drop`. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
+`<tag>` is `user` (the per-stage default for DROPPED, per `cloude-stages default-tag DROPPED` — reflects that the host now needs to run `/finalize`), **unless** an `--tag <name>` was passed to `/drop`. The helper swaps the TODO keyword, replaces any existing trailing `:tag:` chain with the single new tag, and preserves the heading text and everything below it.
 
 ## 4. Report
 

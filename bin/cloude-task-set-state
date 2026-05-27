@@ -96,13 +96,18 @@ from cloude_org import (  # noqa: E402
     now_ts,
     set_dod_verdict,
 )
+from cloude_stages import (  # noqa: E402
+    BALL_TAGS,
+    in_flight,
+    keyword_list,
+    transition_via,
+)
 
-TODO_KEYWORDS = ("PLANNING", "ITERATING", "REVIEW", "MERGING", "COMPLETE", "DROPPED")
+TODO_KEYWORDS = keyword_list()
 # The in-flight (non-terminal) stages. A `--todo` change into one of
 # these is a stage transition that should arm the next `Stop`'s DoD
 # check; COMPLETE / DROPPED are terminal and arm nothing.
-IN_FLIGHT = ("PLANNING", "ITERATING", "REVIEW", "MERGING")
-BALL_TAGS = ("agent", "user", "blocked")
+IN_FLIGHT = in_flight()
 
 # The first heading of a task file: leading stars + space, a known
 # TODO keyword, optional heading text, an optional trailing :tag:chain:,
@@ -135,13 +140,12 @@ def _bail(msg: str, code: int = 30) -> int:
 
 
 def _infer_via(prev_todo: str, new_todo: str) -> str:
-    """Default :ENTERED_VIA: text based on the transition direction."""
-    if new_todo == "DROPPED":
-        return "/drop"
-    order = {k: i for i, k in enumerate(TODO_KEYWORDS)}
-    if order.get(new_todo, 0) < order.get(prev_todo, 0):
-        return "/iterate"
-    return "/advance"
+    """Default :ENTERED_VIA: text based on the transition direction.
+
+    Thin wrapper over `cloude_stages.transition_via` so callers don't
+    import the model directly from here.
+    """
+    return transition_via(prev_todo, new_todo)
 
 
 def main(argv: list[str]) -> int:
