@@ -275,23 +275,16 @@ mkdir -p "$(dirname "$TASK_FILE")"
 # task_id = filename minus .org. ID property uses the YYYY-MM-DD-slug form.
 TASK_ID="$(basename "$TASK_FILE" .org)"
 
-# Choose the starting state per mode. The mode→stage mapping lives in
-# cloude_stages.starting_stage so a future workflow change is one edit
-# in one file.
-if ! NEW_TODO="$(CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
-import os, sys
-sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
-from cloude_stages import starting_stage
-print(starting_stage(sys.argv[1]))
-' "$MODE")"; then
-    bail 13 "cloude_stages.starting_stage($MODE) failed"
-fi
+# Per-mode setup: the starting stage (mode→stage mapping lives in
+# cloude_stages so a future workflow change is one edit in one file)
+# and the optional NOTES_PRELUDE pre-fill.
+NEW_TODO="$("$SCRIPT_DIR/cloude-stages" starting-stage "$MODE")" \
+    || bail 13 "cloude-stages starting-stage $MODE failed"
 NEW_HEADING="$HEADING"
-if [[ "$MODE" == "standard" ]]; then
-    NOTES_PRELUDE=""
-else
-    NOTES_PRELUDE="Adopted from PR $PR_URL"
-fi
+case "$MODE" in
+    standard) NOTES_PRELUDE="" ;;
+    adopt)    NOTES_PRELUDE="Adopted from PR $PR_URL" ;;
+esac
 
 # Render TEMPLATE.org → $TASK_FILE via the shared
 # cloude_org.render_task_from_template helper. Booleans for adopted

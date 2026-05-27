@@ -37,6 +37,12 @@
 #       Print the canonical `#+TODO:` line task files carry. The
 #       drift test asserts tasks/TEMPLATE.org matches this exactly.
 #       Exit codes: 0 success.
+#
+#   starting-stage <MODE>
+#       Print the initial stage keyword for a freshly-promoted task.
+#       MODE is `standard` (start in PLANNING) or `adopt` (start in
+#       ITERATING). Used by bin/cloude-promote-setup.
+#       Exit codes: 0 success, 2 unknown mode.
 
 from __future__ import annotations
 
@@ -54,6 +60,7 @@ from cloude_stages import (  # noqa: E402
     in_flight,
     keyword_list,
     next_stage,
+    starting_stage,
     terminal,
     todo_directive,
 )
@@ -116,6 +123,15 @@ def cmd_todo_directive(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_starting_stage(args: argparse.Namespace) -> int:
+    try:
+        print(starting_stage(args.mode))
+    except ValueError as exc:
+        sys.stderr.write(f"cloude-stages: {exc}\n")
+        return 2
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="cloude-stages",
@@ -149,6 +165,13 @@ def main(argv: list[str]) -> int:
 
     p_td = sub.add_parser("todo-directive", help="Print the canonical #+TODO: line.")
     p_td.set_defaults(func=cmd_todo_directive)
+
+    p_ss = sub.add_parser(
+        "starting-stage",
+        help="Print the initial stage keyword for a freshly-promoted task.",
+    )
+    p_ss.add_argument("mode", help="standard | adopt")
+    p_ss.set_defaults(func=cmd_starting_stage)
 
     args = parser.parse_args(argv)
     return args.func(args)
