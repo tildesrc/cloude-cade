@@ -279,11 +279,12 @@ happy path.
 
 The per-stage DoD bullets live in `bin/cloude_stages.WORKFLOW`
 (consumed by the skeleton generator and the hook via
-`bin/cloude_org.STAGE_DOD`'s read-only re-export) and are mirrored
-in the *Stage details* section above as the human-facing copy. The
-two are kept in sync by `tests/test_stage_drift.py` — change a
-bullet in either place and the test names the artifact that's now
-stale.
+`bin/cloude_org.STAGE_DOD`'s read-only re-export, and by the
+`/advance` skill via `bin/cloude-stages dod <STAGE>`). The *Stage
+details* section above is the human-facing reference; agents
+evaluate against the CLI, not against this prose, so prose drift
+is a documentation lag rather than a correctness bug — but please
+keep them aligned anyway.
 
 ### Who-has-the-ball tag
 

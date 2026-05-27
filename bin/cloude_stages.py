@@ -23,10 +23,17 @@ The model:
   `starting_stage`) — for consumers that don't want to walk the
   `WORKFLOW` tuple by hand.
 
-Drift between this model and the two hand-authored artifacts —
-`tasks/TEMPLATE.org`'s `#+TODO:` line and `CLAUDE.md`'s `#### <STAGE>`
-DoD bullets — is caught by `tests/test_stage_drift.py`. Edit the
-bullets here; the test will tell you if you forgot to update CLAUDE.md.
+Machine consumers (the skeleton appender, the stop hook, the
+`/advance` skill via `bin/cloude-stages dod <STAGE>`) all read the
+bullets from this module, so the on-disk DoD checkboxes and the
+checklist `/advance` evaluates are guaranteed to match. `CLAUDE.md`'s
+`#### <STAGE>` sections mirror the bullets as human-facing reference
+prose; keep them aligned by hand. `tasks/TEMPLATE.org`'s `#+TODO:`
+line is the one artifact that's machine-load-bearing — it's parsed by
+org-mode when humans open task files — so the wider test suite
+exercises `todo_directive()` against it indirectly via the fixture
+in `tests/conftest.py` (which renders task files using the same
+helper).
 
 Importable directly: `from cloude_stages import WORKFLOW, in_flight`.
 The `uv run --script` helpers (`cloude-dash`, `cloude-list-active`,

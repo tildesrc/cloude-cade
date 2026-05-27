@@ -92,12 +92,15 @@ own copy:
   `todo-directive`) so the transition table and tag defaults aren't
   inlined in markdown.
 
-The two hand-authored artifacts that mirror parts of the model —
-`tasks/TEMPLATE.org`'s first `#+TODO:` line and `CLAUDE.md`'s
-`#### <STAGE>` "Definition of done" bullet lists — are guarded
-against drift by `tests/test_stage_drift.py`, not by a
-"remember to edit both" comment. Edit the model, and the test
-will tell you which artifact is now stale.
+Two hand-authored artifacts mirror parts of the model.
+`tasks/TEMPLATE.org`'s first `#+TODO:` line is the canonical org
+directive new tasks are seeded with — keep it equal to
+`cloude_stages.todo_directive()` by hand. `CLAUDE.md`'s
+`#### <STAGE>` "Definition of done" sections are human-facing
+reference prose; `/advance` evaluates against
+`bin/cloude-stages dod <STAGE>` (not against CLAUDE.md), so drift in
+the prose is a documentation lag rather than a correctness bug —
+keep them aligned anyway.
 
 ### Two `#+TODO:` sequences
 
@@ -181,8 +184,7 @@ cold-start reasoning behind the split. The exposed surface:
 - `STAGE_DOD: MappingProxyType[str, tuple[str, ...]]` — read-only view
   onto the per-stage DoD bullets, consumed by the skeleton generator
   and the hook. Owned by `cloude_stages.WORKFLOW`; CLAUDE.md's
-  *Stage details* sections mirror these as the human-facing copy,
-  with `tests/test_stage_drift.py` guarding against divergence.
+  *Stage details* sections mirror these as the human-facing copy.
 - `set_idea_slug(content, heading_text, slug)` — write a `:SLUG:`
   property into the level-2 idea heading matching `heading_text` in
   `tasks/staging.org`. Inserts a new properties drawer if none

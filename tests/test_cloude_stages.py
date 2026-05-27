@@ -9,9 +9,11 @@ externally-observable shape so a downstream consumer that asks for
 "the next stage after ITERATING" or "the per-stage default tag for
 REVIEW" can rely on a stable answer.
 
-Drift between this model and the two hand-authored artifacts
-(`tasks/TEMPLATE.org`, `CLAUDE.md`'s Stage details) is checked
-separately in `test_stage_drift.py`.
+`CLAUDE.md`'s Stage details are human-facing reference prose;
+machine consumers (`/advance` via `bin/cloude-stages dod`, the
+skeleton appender, the stop hook) all read DoD bullets from this
+module directly, so drift in CLAUDE.md is a documentation lag,
+not a correctness bug.
 """
 
 from __future__ import annotations

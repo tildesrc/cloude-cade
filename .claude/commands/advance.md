@@ -64,7 +64,13 @@ required, the default.)
 
 ## 3. Load the DoD for the current state
 
-Read `Stage details` from `$CLOUDE_ROOT/CLAUDE.md` (the cloude repo, mounted at the same path inside the container). Find the `#### <CURRENT_STATE>` section and pull its **Definition of done** bullet list.
+Ask the workflow model — the bullets it returns are the same ones the per-task checkbox skeleton was seeded with, so there's no chance of drift between what you evaluate and what's actually on disk:
+
+```
+DOD_BULLETS="$("$CLOUDE_ROOT/bin/cloude-stages" dod "$TODO")"
+```
+
+One bullet per line on stdout. For human-friendly context (the responsibilities prose, the "*Auto-ticked*" note on PLANNING's plan-approval bullet, etc.), the `#### <CURRENT_STATE>` section in `$CLOUDE_ROOT/CLAUDE.md` is the matching reference; the bullets there mirror the model but the CLI is the source of truth for the checklist this skill evaluates.
 
 ## 4. Evaluate each DoD item
 

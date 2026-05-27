@@ -90,10 +90,11 @@ DOD_KEYWORDS = ("PENDING", "UNSATISFIABLE", "PASS")
 # Per-stage Definition-of-Done bullets. Read-only view onto the
 # `cloude_stages.WORKFLOW` registry so callers indexing
 # `STAGE_DOD["ITERATING"]` keep working. The bullets are owned by
-# `cloude_stages`; CLAUDE.md (Stage details → <stage> → Definition of
-# done) mirrors them as the human-facing copy. Drift between this map
-# and CLAUDE.md is caught by `tests/test_stage_drift.py` rather than
-# by a hand-maintained "edit both" comment.
+# `cloude_stages`; CLAUDE.md's "Stage details" sections mirror them
+# as human-facing reference prose. Machine consumers — this map and
+# `/advance` via `bin/cloude-stages dod <STAGE>` — all read from the
+# model directly, so CLAUDE.md drift is a documentation lag rather
+# than a correctness bug.
 STAGE_DOD: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
     {s.name: s.dod_bullets for s in WORKFLOW}
 )
