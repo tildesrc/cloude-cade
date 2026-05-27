@@ -2,10 +2,12 @@
 repos/
 worktrees/
 
-# Track project-scoped slash commands (overrides global ignore of .claude/)
+# Track project-scoped slash commands and settings (overrides global
+# ignore of .claude/)
 !.claude/
 .claude/*
 !.claude/commands/
+!.claude/settings.json
 
 # Emacs
 *~
@@ -36,3 +38,8 @@ __pycache__/
 # Project-specific pre-launch hooks — each user adds their own.
 /repo-hooks/*
 !/repo-hooks/.gitkeep
+
+# Inter-claude inbox — only the top-level .gitkeep is tracked; the
+# per-recipient subfolders and individual messages are local.
+/inbox/*
+!/inbox/.gitkeep

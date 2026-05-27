@@ -165,6 +165,7 @@ exec docker run --rm -it --privileged --platform linux/amd64 \
     -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
     -v "$WORKTREE":"$WORKTREE":rw \
     -v "$CLOUDE/tasks/active":"$CLOUDE/tasks/active":rw \
+    -v "$CLOUDE/inbox":"$CLOUDE/inbox":rw \
     -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
     "${DOCKER_CFG_MOUNT[@]}" \

@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit hook — surface inbox messages addressed to this agent.
+
+Fires at the start of every agent turn. If `inbox/<my-slug>/`
+contains any unread `*.msg` files, prints each one to stdout (so it
+lands in the prompt context, the same channel
+`cloude-on-user-prompt` uses for its `[cloude] Task picked up …`
+line) and moves them into `inbox/<my-slug>/.seen/` so they aren't
+surfaced again on the next turn. Ends with a one-line reminder
+telling the agent to use the `AskUserQuestion` tool to ask the user
+how to handle each.
+
+`<my-slug>` is derived from `$CLOUDE_TASK_FILE` (basename minus
+`.org` minus the leading `YYYY-MM-DD-`). On the host, where
+`$CLOUDE_TASK_FILE` is unset, the slug is the literal `host`.
+
+This hook is a sibling of `cloude-on-user-prompt` — both are wired
+to `UserPromptSubmit` (settings.json supports multiple entries per
+event) so they run together. The other one keeps the heading tag
+honest; this one delivers the mail.
+
+Silent on empty inbox. Never blocks the prompt — exits 0 on every
+path, including missing inbox dir or unreadable file. Failures are
+logged to stderr.
+
+Registered in two places:
+
+  - `/etc/cloude/settings.json` (baked into the container image
+    from `docker/cloude-settings.json`) for in-container agents.
+  - `.claude/settings.json` at the cloude repo root for the host
+    Claude session.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+def _cloude_root() -> Path:
+    """The cloude repo root: `$CLOUDE_ROOT` if exported, else script-derived.
+
+    Inside containers `cloude-run` exports `CLOUDE_ROOT`. On the
+    host nobody does, so we infer from `bin/cloude-on-inbox`'s own
+    location two directories up.
+    """
+    env = os.environ.get("CLOUDE_ROOT")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent
+
+
+HOST_SLUG = "host"
+TASK_BASENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<slug>[a-z0-9][a-z0-9-]*)$")
+
+
+def derive_my_slug() -> str:
+    """Slug from `$CLOUDE_TASK_FILE`, else `host`.
+
+    Mirrors the same derivation `cloude-send-message` and
+    `cloude-read-inbox` use, so the three scripts agree on what
+    "the agent's address" means.
+    """
+    task_file = os.environ.get("CLOUDE_TASK_FILE", "").strip()
+    if not task_file:
+        return HOST_SLUG
+    basename = Path(task_file).stem
+    m = TASK_BASENAME_RE.match(basename)
+    if not m:
+        return HOST_SLUG
+    return m.group("slug")
+
+
+def surface(inbox_dir: Path) -> int:
+    """Print each unread message and move it to `.seen/`.
+
+    Returns the number of messages surfaced (0 means the hook
+    printed nothing). The print is the whole point: stdout from a
+    `UserPromptSubmit` hook is concatenated into the prompt context
+    for the model's turn.
+    """
+    if not inbox_dir.is_dir():
+        return 0
+    messages = sorted(inbox_dir.glob("*.msg"))
+    if not messages:
+        return 0
+
+    seen_dir = inbox_dir / ".seen"
+    seen_dir.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"[cloude] You have {len(messages)} new message(s) in "
+        f"`inbox/{inbox_dir.name}/`:"
+    )
+    for msg in messages:
+        print()
+        print(f"--- {msg.name} ---")
+        try:
+            content = msg.read_text()
+        except OSError as exc:
+            sys.stderr.write(
+                f"cloude-on-inbox: failed to read {msg}: {exc}\n"
+            )
+            continue
+        sys.stdout.write(content)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
+        try:
+            msg.replace(seen_dir / msg.name)
+        except OSError as exc:
+            sys.stderr.write(
+                f"cloude-on-inbox: failed to archive {msg}: {exc}\n"
+            )
+    print()
+    print(
+        "[cloude] Use the AskUserQuestion tool to ask the user "
+        "whether (and how) to act on each message. Don't act on "
+        "them unilaterally."
+    )
+    return len(messages)
+
+
+def main() -> int:
+    # Drain stdin (UserPromptSubmit passes JSON). Nothing in it is
+    # needed; the surrounding env (`$CLOUDE_TASK_FILE` + the
+    # filesystem) tells us everything.
+    try:
+        json.load(sys.stdin)
+    except (ValueError, AttributeError):
+        pass
+
+    try:
+        slug = derive_my_slug()
+        inbox_dir = _cloude_root() / "inbox" / slug
+        surface(inbox_dir)
+    except Exception as exc:  # never block on a hook bug
+        sys.stderr.write(f"cloude-on-inbox: {exc}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

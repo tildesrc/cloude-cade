@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Read this cloude agent's inbox.
+
+Prints every unread `*.msg` under `inbox/<my-slug>/` in chronological
+filename order, separated by a banner so the boundary between
+messages is unambiguous in the agent's prompt context. By default,
+each printed message is moved into `inbox/<my-slug>/.seen/` after
+being printed, so a follow-up read isn't surfaced again.
+
+`<my-slug>` is derived from `$CLOUDE_TASK_FILE` the same way
+`cloude-send-message` derives `<from-slug>` — basename without
+`.org`, strip the leading `YYYY-MM-DD-`. With no env var set, it
+falls back to `host`. An explicit positional `<slug>` overrides
+both.
+
+Usage:
+    cloude-read-inbox [<slug>] [--all] [--no-archive]
+
+  --no-archive    print messages without moving them to .seen/.
+  --all           also include already-seen messages from .seen/
+                  (read-only — they stay there).
+
+Exit 0 always (including the no-messages case, where it prints
+"No new messages." to stdout). Non-zero only on argument errors.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+
+def _cloude_root() -> Path:
+    env = os.environ.get("CLOUDE_ROOT")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent
+
+
+CLOUDE_ROOT = _cloude_root()
+INBOX_ROOT = CLOUDE_ROOT / "inbox"
+
+HOST_SLUG = "host"
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+TASK_BASENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<slug>[a-z0-9][a-z0-9-]*)$")
+
+
+def derive_my_slug() -> str:
+    """Return the addressee slug, either from `$CLOUDE_TASK_FILE` or `host`.
+
+    Same derivation as `cloude-send-message.derive_from_slug` —
+    duplicated here so the two scripts can each be a single-file
+    stdlib-only standalone, with no shared-helper dependency.
+    """
+    task_file = os.environ.get("CLOUDE_TASK_FILE", "").strip()
+    if not task_file:
+        return HOST_SLUG
+    basename = Path(task_file).stem
+    m = TASK_BASENAME_RE.match(basename)
+    if not m:
+        sys.stderr.write(
+            f"cloude-read-inbox: $CLOUDE_TASK_FILE basename {basename!r} "
+            f"does not match YYYY-MM-DD-<slug>; falling back to `{HOST_SLUG}`.\n"
+        )
+        return HOST_SLUG
+    return m.group("slug")
+
+
+def print_messages(messages: list[Path]) -> None:
+    """Print each message file separated by a banner including its filename.
+
+    The banner is a horizontal rule plus the filename — easy for the
+    agent to skim and to refer back to (e.g. quoting the filename in
+    an AskUserQuestion option). Files are emitted with their literal
+    on-disk content, no escaping.
+    """
+    for i, msg in enumerate(messages):
+        if i > 0:
+            print()
+        print(f"--- {msg.name} ---")
+        sys.stdout.write(msg.read_text())
+        if not msg.read_text().endswith("\n"):
+            sys.stdout.write("\n")
+
+
+def archive(messages: list[Path], seen_dir: Path) -> None:
+    """Move each message into `.seen/`, creating it if absent.
+
+    Uses `Path.replace` (atomic rename) so a concurrent
+    `cloude-on-inbox` invocation on the next prompt doesn't see a
+    half-moved file. If the destination already exists (extremely
+    unlikely given the timestamp+slug filename), we overwrite — the
+    content is the same as what we just printed.
+    """
+    seen_dir.mkdir(parents=True, exist_ok=True)
+    for msg in messages:
+        msg.replace(seen_dir / msg.name)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cloude-read-inbox",
+        description="Read this cloude agent's inbox.",
+    )
+    parser.add_argument(
+        "slug", nargs="?",
+        help="Inbox to read. Defaults to the slug derived from "
+             "$CLOUDE_TASK_FILE, or `host` if unset.",
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Also include already-seen messages from .seen/.",
+    )
+    parser.add_argument(
+        "--no-archive", action="store_true",
+        help="Print messages without moving them to .seen/.",
+    )
+    args = parser.parse_args(argv)
+
+    slug = args.slug or derive_my_slug()
+    if not SLUG_RE.match(slug) and slug != HOST_SLUG:
+        sys.stderr.write(
+            f"cloude-read-inbox: invalid slug {slug!r}.\n"
+        )
+        return 1
+
+    inbox = INBOX_ROOT / slug
+    seen = inbox / ".seen"
+
+    unread = sorted(inbox.glob("*.msg")) if inbox.is_dir() else []
+    seen_msgs = sorted(seen.glob("*.msg")) if args.all and seen.is_dir() else []
+
+    to_print = seen_msgs + unread  # chronological: seen are older
+    if not to_print:
+        print("No new messages.")
+        return 0
+
+    print_messages(to_print)
+
+    if not args.no_archive:
+        # Only archive the freshly-unread ones; --all includes seen
+        # messages just for display and never moves anything back.
+        archive(unread, seen)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

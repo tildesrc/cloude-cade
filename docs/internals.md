@@ -338,8 +338,36 @@ dependency, and runs on plain `python3`.
   The skill is responsible for prompting the user and rerunning with
   the matching override; the script itself has no interactive
   fallback logic.
+- **`cloude-send-message <to-slug> [-m TEXT]`** — Writes one message
+  into `inbox/<to-slug>/`. Derives the `from` slug from
+  `$CLOUDE_TASK_FILE` (basename minus `.org` minus the leading
+  `YYYY-MM-DD-`) or falls back to the literal `host` when the env
+  var is unset. Refuses if the env var is set but the basename
+  doesn't parse — better to fail loudly than silently impersonate
+  the host. Validates `<to-slug>` is a syntactically valid slug
+  and warns (non-fatally) if it isn't an active task slug or
+  `host`; an unknown recipient still gets the message in case it's
+  about to be promoted. Builds the RFC-822-ish message body
+  (`to:` / `from:` / `date:` headers, blank line, body) and writes
+  it atomically via a same-dir tmp file plus `os.link` — receivers
+  never see a half-written file, and an exact-ms filename collision
+  bumps the timestamp's ms by one until a free name is found.
+  Filename is `<iso-utc-stamp-with-ms>-<from-slug>.msg`; UTC keeps
+  chronological ordering stable across senders in different
+  timezones. Stdlib-only, plain `#!/usr/bin/env python3` — no
+  `cloude-python` re-exec, no `cloude_org` import.
+- **`cloude-read-inbox [<slug>] [--all] [--no-archive]`** — Reads
+  the addressee's inbox. With no positional arg, derives the
+  addressee from `$CLOUDE_TASK_FILE` the same way
+  `cloude-send-message` derives the `from` slug, or falls back to
+  `host`. Prints each unread `*.msg` in chronological filename
+  order, separated by a `--- <filename> ---` banner, then by
+  default moves each into `inbox/<slug>/.seen/` so a follow-up
+  read isn't surfaced again. `--no-archive` peeks without moving;
+  `--all` also includes `.seen/` (read-only — already-seen
+  messages aren't moved back). Prints `No new messages.` on an
+  empty inbox and exits 0. Stdlib-only, plain `python3`.
 
-## In-container hooks
 
 `docker/cloude-settings.json` registers Claude Code hooks that fire
 inside the container, keeping the task heading's TODO keyword and
@@ -362,6 +390,21 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   dashboard the whole time. `:blocked:` is left untouched (set
   deliberately, not cleared by a stray prompt) and the hook never
   blocks a prompt.
+- **`UserPromptSubmit` → `bin/cloude-on-inbox`.** Wired as a
+  *second* `UserPromptSubmit` entry in `cloude-settings.json`,
+  alongside `cloude-on-user-prompt`. Resolves the agent's slug
+  (from `$CLOUDE_TASK_FILE` or `host`), then, for every unread
+  `*.msg` under `inbox/<slug>/`, prints the file's full content
+  with a `--- <filename> ---` banner into the prompt context and
+  moves it to `inbox/<slug>/.seen/`. Ends with a one-line reminder
+  to use `AskUserQuestion` to ask the user how to handle each
+  message. Silent on an empty inbox; never blocks the prompt (a
+  bare `try/except` around the surface step exits 0 on any
+  error). Stdlib-only, plain `python3`. The same script is wired
+  for the host Claude session via `.claude/settings.json` at the
+  cloude repo root — that file resolves the script path through
+  `$CLAUDE_PROJECT_DIR` (the host-side equivalent of the
+  container's `$CLOUDE_ROOT`) so it's portable.
 - **`Stop` → `bin/cloude-on-stop`.** Fires at the end of every agent
   turn and does two distinct jobs. *Tag maintenance:* if the task is
   in PLANNING or ITERATING with tag `:agent:`, flips it to `:user:`
@@ -538,6 +581,14 @@ The container:
   task file under `tasks/active/` is technically writable from any
   in-container agent — agents must by convention only edit their
   own `$CLOUDE_TASK_FILE`.
+- `inbox/` is mounted directory-level rw for the same reason —
+  it's the shared drop point for inter-agent messages
+  (`bin/cloude-send-message` writes here, `bin/cloude-on-inbox`
+  reads from here). Sharing one directory across every in-flight
+  container plus the host is the whole point: agent A writes
+  `inbox/B/<stamp>-A.msg` and agent B's hook surfaces it on its
+  next turn. Same atomic-rename caveat as `tasks/active/` —
+  hence the directory-level bind.
 
 ### `bin/cloude-run`
 

@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Send a short message from this cloude agent to another's inbox.
+
+The cloude inter-agent inbox is a flat directory tree at the cloude
+repo root:
+
+    inbox/<recipient-slug>/<iso-stamp-with-ms>-<from-slug>.msg
+    inbox/<recipient-slug>/.seen/   (filled by the recipient's hook)
+
+Every cloude agent has a *slug* address: the short kebab slug of the
+task it is running (`<slug>` of `tasks/active/YYYY-MM-DD-<slug>.org`)
+for an in-container task agent, or the literal `host` for the host
+Claude session. The same string is the `to:` / `from:` header value
+and the inbox folder name.
+
+Usage:
+    cloude-send-message <to-slug> [-m TEXT | --message TEXT]
+
+The body is read from `-m TEXT` if given, else from stdin. Empty
+bodies are permitted (header-only "ping" messages). Lines are written
+verbatim — there is no escaping.
+
+This script:
+
+  - Derives `<from-slug>` from `$CLOUDE_TASK_FILE`'s basename (strips
+    `.org` and the leading `YYYY-MM-DD-` date prefix). When
+    `$CLOUDE_TASK_FILE` is unset/empty, the sender is `host`.
+  - Refuses to send if the derived `<from-slug>` is literally `host`
+    while `$CLOUDE_TASK_FILE` was set — the env var pointing at a
+    real task should never resolve to the reserved host slug; if it
+    does, something is wrong and we'd rather fail loudly.
+  - Validates `<to-slug>` is non-empty, syntactically a slug (letters,
+    digits, hyphens), and matches either an active task slug
+    (scanning `tasks/active/*.org`) or the literal `host`. An
+    unrecognised slug is a warning, not a fatal error — a task that
+    is about to be promoted can be pre-messaged.
+  - Builds the message text:
+
+        to: <to-slug>
+        from: <from-slug>
+        date: <iso-8601 local time with tz>
+
+        <body>
+
+  - Writes it to `inbox/<to-slug>/<stamp>-<from>.msg` via a same-dir
+    tmp file plus `os.link` (raises on collision) — receivers never
+    see a half-written file, and an exact-ms collision bumps the ms
+    by one until the destination name is free.
+  - Prints the path of the written file (relative to the cloude root)
+    and exits 0. Non-zero on validation / write failure.
+
+Exit codes:
+    0  message written.
+    1  argument error (no <to-slug>, bad slug syntax, etc.).
+    2  refused: derived from-slug was `host` despite
+       $CLOUDE_TASK_FILE being set (likely env corruption).
+    3  filesystem error (couldn't create inbox folder or write file).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import re
+import sys
+import uuid
+from pathlib import Path
+
+def _cloude_root() -> Path:
+    """The cloude repo root: $CLOUDE_ROOT if exported, else script-derived.
+
+    Inside a per-task container `bin/cloude-run` exports
+    `CLOUDE_ROOT` so any helper can find the inbox without inferring
+    paths from `__file__`. On the host nobody exports it, so we fall
+    back to two levels above this script — works for both the
+    user's installed cloude (`bin/` under the repo root) and a
+    dev-time worktree.
+    """
+    env = os.environ.get("CLOUDE_ROOT")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent
+
+
+CLOUDE_ROOT = _cloude_root()
+INBOX_ROOT = CLOUDE_ROOT / "inbox"
+TASKS_ACTIVE = CLOUDE_ROOT / "tasks" / "active"
+
+HOST_SLUG = "host"
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+TASK_BASENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<slug>[a-z0-9][a-z0-9-]*)$")
+
+
+def derive_from_slug() -> str:
+    """Return the sender's slug, either from $CLOUDE_TASK_FILE or `host`.
+
+    Inside a per-task container `cloude-run` exports the absolute
+    path of the active task file as $CLOUDE_TASK_FILE; we strip the
+    `.org` extension and the leading `YYYY-MM-DD-` prefix to recover
+    the short slug. On the host the env var is unset and we fall
+    back to the reserved `host` slug.
+
+    Returns the slug or raises SystemExit(2) if the env var is set
+    but the basename doesn't parse — the caller decided to refuse
+    rather than silently fall back to `host`.
+    """
+    task_file = os.environ.get("CLOUDE_TASK_FILE", "").strip()
+    if not task_file:
+        return HOST_SLUG
+
+    basename = Path(task_file).stem  # strips trailing `.org`
+    m = TASK_BASENAME_RE.match(basename)
+    if not m:
+        sys.stderr.write(
+            f"cloude-send-message: $CLOUDE_TASK_FILE basename {basename!r} "
+            f"does not match YYYY-MM-DD-<slug>; refusing to fall back to "
+            f"`{HOST_SLUG}`.\n"
+        )
+        raise SystemExit(2)
+    return m.group("slug")
+
+
+def known_recipients() -> set[str]:
+    """Slugs we recognize as valid recipients: active task slugs + `host`.
+
+    Scans `tasks/active/*.org` filenames; only well-formed names
+    contribute. Used for the soft warning when a sender addresses
+    something we don't recognise — pre-messaging a not-yet-promoted
+    task is allowed, just noisy.
+    """
+    out = {HOST_SLUG}
+    if TASKS_ACTIVE.is_dir():
+        for p in TASKS_ACTIVE.glob("*.org"):
+            m = TASK_BASENAME_RE.match(p.stem)
+            if m:
+                out.add(m.group("slug"))
+    return out
+
+
+def build_message(to_slug: str, from_slug: str, body: str) -> str:
+    """Render the on-disk RFC-822-ish message text.
+
+    Header order matches what cloude-read-inbox / cloude-on-inbox
+    expect to display. The blank line between headers and body is
+    significant — it's what separates them.
+    """
+    ts = dt.datetime.now().astimezone().isoformat(timespec="milliseconds")
+    body = body.rstrip("\n")
+    return f"to: {to_slug}\nfrom: {from_slug}\ndate: {ts}\n\n{body}\n"
+
+
+def filename_for(from_slug: str, when: dt.datetime) -> str:
+    """Build a `<iso-utc-stamp-with-ms>-<from-slug>.msg` filename.
+
+    Uses UTC for the timestamp so chronological filename ordering is
+    stable across senders in different timezones. Colons in the ISO
+    stamp are replaced with `-` so shells don't fight us.
+    """
+    utc = when.astimezone(dt.timezone.utc)
+    stamp = utc.strftime("%Y-%m-%dT%H-%M-%S") + f"-{utc.microsecond // 1000:03d}"
+    return f"{stamp}-{from_slug}.msg"
+
+
+def write_atomic(dest: Path, content: str) -> None:
+    """Write `content` to `dest` atomically, raising FileExistsError on collision.
+
+    Same-dir tmp + `os.link` is the POSIX-atomic recipe: the tmp file
+    appears under a random name in the target dir, then `os.link`
+    publishes it as `dest` only if `dest` doesn't already exist (one
+    syscall, no TOCTOU). The tmp is unlinked unconditionally
+    afterwards. The collision branch — when two senders race on the
+    same `<ms>-<from>.msg` name — is the caller's cue to bump the
+    millisecond and try again.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".tmp-{uuid.uuid4().hex}.msg"
+    tmp.write_text(content)
+    try:
+        os.link(tmp, dest)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def send(to_slug: str, body: str) -> Path:
+    """Validate, compose, and write the message. Returns the final path."""
+    if not SLUG_RE.match(to_slug):
+        sys.stderr.write(
+            f"cloude-send-message: invalid recipient slug {to_slug!r} "
+            f"(must be lowercase letters, digits, and hyphens).\n"
+        )
+        raise SystemExit(1)
+
+    from_slug = derive_from_slug()
+
+    if to_slug not in known_recipients():
+        sys.stderr.write(
+            f"cloude-send-message: warning — {to_slug!r} is not an active "
+            f"task slug or `{HOST_SLUG}`. Writing anyway in case the "
+            f"recipient is about to be promoted.\n"
+        )
+
+    when = dt.datetime.now(dt.timezone.utc)
+    content = build_message(to_slug, from_slug, body)
+    # Retry on exact-ms collision: bump the timestamp by 1 ms and
+    # rebuild the filename until link() succeeds. Bounded to keep
+    # us from spinning if something is really wrong with the dir.
+    for _ in range(1000):
+        dest = INBOX_ROOT / to_slug / filename_for(from_slug, when)
+        try:
+            write_atomic(dest, content)
+            return dest
+        except FileExistsError:
+            when += dt.timedelta(milliseconds=1)
+        except OSError as exc:
+            sys.stderr.write(f"cloude-send-message: write failed: {exc}\n")
+            raise SystemExit(3)
+    sys.stderr.write(
+        "cloude-send-message: gave up after 1000 ms-bumps trying to find "
+        "a free filename — something is wrong with the inbox dir.\n"
+    )
+    raise SystemExit(3)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cloude-send-message",
+        description="Send a message to another cloude agent's inbox.",
+    )
+    parser.add_argument("to_slug", help="Recipient slug (or `host`).")
+    parser.add_argument(
+        "-m", "--message",
+        help="Message body. If omitted, read from stdin.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.message is not None:
+        body = args.message
+    else:
+        body = sys.stdin.read()
+
+    dest = send(args.to_slug, body)
+    rel = dest.relative_to(CLOUDE_ROOT)
+    print(rel)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
