@@ -48,7 +48,7 @@ sub-heading's properties drawer (in addition to the project-level
 | ------------------- | ------------------------------------------------------------------ |
 | `:ADOPT:`           | *(optional)* URL of an existing open PR in the project's repo. Triggers ADOPT mode (`/promote` checks out the PR's branch as a worktree rather than opening a new draft PR). Without this property, the idea promotes as a standard task. Renders `:ADOPTED: t` into the new active task's properties drawer. |
 | `:COMPANION:`       | *(optional)* Sibling cloude task ID (slug-dated form, e.g. `2026-05-20-acme-webapp-side`). Copied verbatim into the new active task file's `:COMPANION:` property. |
-| `:SLUG:`            | *(optional)* Override the auto-derived task slug. The default slug is derived from the heading (`re.sub(r'[^a-z0-9]+', '-', heading.lower()).strip('-')`); when `:SLUG:` is set, that value is used verbatim. `cloude-promote`'s `--slug` flag wins over both. |
+| `:SLUG:`            | *(optional)* Override the auto-derived task slug. The default slug is derived from the heading (`re.sub(r'[^a-z0-9]+', '-', heading.lower()).strip('-')`); when `:SLUG:` is set, that value is used verbatim. `cloude-promote`'s `--slug` flag wins over both. Normally written by the staging-slug watcher (`bin/cloude-watch-staging-slugs` → `/suggest-slugs` → `bin/cloude-set-staging-slug`); see the *Helper scripts* section. An empty `:SLUG:` (no value) is the explicit "please suggest one" sentinel — `cloude-list-staging --slugless` treats it as missing, and `bin/cloude-set-staging-slug` replaces it. A non-empty user-set value is preserved (clobber-rejected). |
 
 All three are detected by `bin/cloude-list-staging` (which emits
 `MODE` / `PR_URL` / `COMPANION` / `SLUG` lines for the chosen idea)
@@ -147,6 +147,17 @@ cold-start reasoning behind the split. The exposed surface:
 - `STAGE_DOD: dict[str, tuple[str, ...]]` — per-stage DoD bullets,
   consumed by the skeleton generator and the hook. CLAUDE.md's
   *Stage details* sections mirror these as the human-facing copy.
+- `set_idea_slug(content, heading_text, slug)` — write a `:SLUG:`
+  property into the level-2 idea heading matching `heading_text` in
+  `tasks/staging.org`. Inserts a new properties drawer if none
+  exists, otherwise inserts the `:SLUG:` line before the drawer's
+  `:END:` (preserving drawer indent). Raises `SlugClobberError`
+  when an existing non-empty `:SLUG:` doesn't match (user-set slugs
+  win); an empty `:SLUG:` is the "please suggest" sentinel and gets
+  replaced. Backs `bin/cloude-set-staging-slug`.
+- `SLUG_RE` / `SLUG_MAX_LEN` / `SlugClobberError` — validation
+  pattern and exception used by `set_idea_slug` and
+  `cloude-set-staging-slug`.
 
 ### Lifecycle
 
@@ -197,8 +208,14 @@ dependency, and runs on plain `python3`.
   value in that case. `COMPANION` carries the idea's `:COMPANION:`
   property (empty if absent). `SKIP_REVIEW` carries the project
   heading's optional `:SKIP_REVIEW:` property. `SLUG` carries the
-  idea's optional `:SLUG:` property (empty if absent). Used by
-  `/promote` step 1 and by `bin/cloude-promote --select N`.
+  idea's optional `:SLUG:` property (empty if absent — the
+  consumer falls back to the heading-derived slug). With
+  `--slugless`, emits a tab-separated `<project>\t<heading>` line
+  per idea whose `:SLUG:` is missing or empty (the "needs a
+  suggestion" set); empty output means there's nothing to do.
+  Used by `/promote` step 1 + `bin/cloude-promote --select N`
+  (default / `--select`) and by `bin/cloude-watch-staging-slugs` /
+  `/suggest-slugs` (`--slugless`).
 - **`cloude-promote`** — Deterministic `/promote` orchestrator. Takes
   `--select N` (optionally `--slug SLUG`), calls `cloude-list-staging
   --select N` for the idea record, performs the mode-specific gh
@@ -224,6 +241,40 @@ dependency, and runs on plain `python3`.
   prints the assembled `cloude-promote-setup` argv (one arg per
   line) — used by `tests/test_promote.py` to assert on flag wiring
   without spinning up real worktrees / draft PRs / tmux sessions.
+- **`cloude-set-staging-slug <heading-text> <slug>`** — Write a
+  `:SLUG:` property into the staging.org idea sub-heading whose text
+  matches `<heading-text>`. Inserts a fresh properties drawer if the
+  idea has none, otherwise inserts the `:SLUG:` line just before the
+  drawer's `:END:`. Refuses to overwrite an existing non-empty
+  `:SLUG:` (exit 3 — user-set slugs win over the LLM-generated
+  ones); an *empty* `:SLUG:` is treated as the explicit "please
+  suggest" sentinel and gets replaced. Validates `<slug>` against
+  `SLUG_RE` (exit 30 on malformed). Called by `/suggest-slugs` once
+  per heading returned by `cloude-list-staging --slugless`.
+- **`cloude-watch-staging-slugs`** — Long-running watcher: emits
+  `STAGING_HAS_SLUGLESS_IDEAS` on stdout each time
+  `tasks/staging.org` ends up with an idea lacking a `:SLUG:`. The
+  host-side `Monitor` armed by `/suggest-slugs-watch` consumes those
+  lines as notification turns that route to `/suggest-slugs`. Uses
+  the `watchdog` library for cross-platform native filesystem events
+  (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on
+  Windows) — no OS-level install step. Singleton via non-blocking
+  `fcntl.flock` on `/tmp/cloude-watch-staging-slugs.lock` — exactly
+  one watcher runs across concurrent host sessions; losers exit
+  immediately (no standby, no retry). A 200ms debouncer collapses
+  burst events from a single atomic-rename save into one
+  `--slugless` check. Polyglot Python (sh re-exec into
+  `bin/cloude-python`), so it runs under the shared cloude venv.
+  Honors `CLOUDE_NO_SLUG_WATCH=1`; `CLOUDE_SLUG_WATCH_LOCK` and
+  `CLOUDE_SLUG_WATCH_DEBOUNCE_S` override the lockfile path and
+  debounce delay respectively.
+- **`cloude-on-host-session-start`** — Host-side `SessionStart` hook
+  (registered in `.claude/settings.json`). Emits a
+  `hookSpecificOutput.additionalContext` JSON that tells claude to
+  call `/suggest-slugs-watch` early in the session — the auto-arm
+  step for the staging-slug watcher. Always exits 0; never blocks
+  session start. Honors `CLOUDE_NO_SLUG_WATCH=1` by emitting no
+  additionalContext.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -421,6 +472,23 @@ bullets, and the `** Log` entry helpers (`iter_log_entries`,
 `latest_log_entry`, `append_log_entry_skeleton`, `set_dod_verdict`,
 `find_log_section`) through `bin/cloude_org.py`.
 
+### Host-side hooks (`.claude/settings.json`)
+
+A separate `.claude/settings.json` at the cloude repo root configures
+hooks for *host* claude sessions (the ones running in the cloude
+repo, not inside a per-task container). These do not affect the
+in-container settings file above; they're loaded independently by
+Claude Code based on the cwd.
+
+- **`SessionStart` → `bin/cloude-on-host-session-start`.** Fires when
+  a host claude session opens against the cloude repo. Emits JSON
+  with `hookSpecificOutput.additionalContext` instructing claude to
+  call `/suggest-slugs-watch` early in the session — that arms the
+  staging-slug watcher (`bin/cloude-watch-staging-slugs`) via a
+  persistent `Monitor`. Idempotent across concurrent sessions thanks
+  to the watcher's `flock -n`. `CLOUDE_NO_SLUG_WATCH=1` makes this
+  emit nothing.
+
 ### Why hot-path hooks don't use `uv run`
 
 The hook scripts above and `cloude-task-set-state` are on the
@@ -433,9 +501,9 @@ fast. So instead the dependencies are pre-resolved into a venv on
 disk once and the hooks re-exec into its Python:
 
 - `pyproject.toml` + `uv.lock` at the repo root declare the shared
-  Python deps (currently `orgparse>=0.4` and `inotify_simple>=1.3;
-  sys_platform=='linux'`). One source of truth across host and
-  container.
+  Python deps (currently `orgparse>=0.4`, `inotify_simple>=1.3;
+  sys_platform=='linux'`, and `watchdog>=4`). One source of truth
+  across host and container.
 - `make sync` (host) runs `uv sync --frozen --no-install-project`
   into `./.venv-host/`.
 - The Dockerfile runs the same `uv sync` against the same lockfile

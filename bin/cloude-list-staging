@@ -45,7 +45,16 @@
 # (sibling cloude task ID, slug-dated form); /promote forwards it the
 # same way. SLUG carries the idea's optional :SLUG: property — when
 # set, cloude-promote uses it as the task slug instead of deriving
-# one from the heading.
+# one from the heading. The slug is normally written by the
+# staging-slug watcher (`bin/cloude-watch-staging-slugs` /
+# `/suggest-slugs`) but can also be hand-edited on the idea drawer.
+#
+# With --slugless, prints one line per idea sub-heading whose
+# properties drawer has no `:SLUG:` (or has an empty `:SLUG:`),
+# tab-separated as `<project>\t<heading-text>`. Used by
+# `bin/cloude-watch-staging-slugs` to decide when to emit a
+# notification line into the host claude session, and by
+# `/suggest-slugs` to know which headings need a generated slug.
 #
 # Exit 0 on success (including empty staging); exit 2 on a usage
 # error, an out-of-range --select index, or a file that can't be
@@ -118,6 +127,7 @@ def _emit(key: str, value: str) -> None:
 
 def main(argv: list[str]) -> int:
     select = None
+    slugless = False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -134,9 +144,11 @@ def main(argv: list[str]) -> int:
                     f"got {argv[i]!r}\n"
                 )
                 return 2
+        elif arg == "--slugless":
+            slugless = True
         elif arg in ("-h", "--help"):
             sys.stdout.write(
-                "usage: cloude-list-staging [--select N]\n"
+                "usage: cloude-list-staging [--select N | --slugless]\n"
             )
             return 0
         else:
@@ -144,12 +156,20 @@ def main(argv: list[str]) -> int:
             return 2
         i += 1
 
+    if select is not None and slugless:
+        sys.stderr.write(
+            "cloude-list-staging: --select and --slugless are mutually exclusive\n"
+        )
+        return 2
+
     if not STAGING.exists():
         if select is not None:
             sys.stderr.write(
                 f"cloude-list-staging: no staging file at {STAGING}\n"
             )
             return 2
+        if slugless:
+            return 0
         print("PROMOTABLE")
         print("TODO_PROJECTS 0")
         return 0
@@ -178,6 +198,12 @@ def main(argv: list[str]) -> int:
         _emit("COMPANION", match["companion"])
         _emit("SKIP_REVIEW", match["skip_review"])
         _emit("SLUG", match["slug"])
+        return 0
+
+    if slugless:
+        for r in records:
+            if not r["slug"]:
+                print(f"{r['project']}\t{r['title']}")
         return 0
 
     print("PROMOTABLE")

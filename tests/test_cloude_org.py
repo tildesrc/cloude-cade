@@ -18,8 +18,11 @@ from cloude_org import (
     DOD_KEYWORDS,
     DodConsistencyError,
     PLAN_APPROVED_BULLET,
+    SLUG_MAX_LEN,
+    SLUG_RE,
     STAGE_DOD,
     STAGE_KEYWORDS,
+    SlugClobberError,
     _format_duration,
     _parse_ts,
     append_log_entry_skeleton,
@@ -35,6 +38,7 @@ from cloude_org import (
     remove_staging_entry,
     render_task_from_template,
     set_dod_verdict,
+    set_idea_slug,
 )
 
 
@@ -533,6 +537,92 @@ STAGING_SAMPLE = """\
 
 * Personal todos
 """
+
+
+class TestSetIdeaSlug:
+    def test_inserts_drawer_when_idea_has_none(self):
+        new = set_idea_slug(STAGING_SAMPLE, "First idea", "first-idea")
+        # First idea is a bare heading with no body in the sample;
+        # set_idea_slug should synthesise a fresh drawer under it.
+        assert (
+            "** First idea\n"
+            "   :PROPERTIES:\n"
+            "   :SLUG: first-idea\n"
+            "   :END:\n"
+        ) in new
+        # Sibling untouched.
+        assert ":ADOPT: https://github.com/example/example/pull/99\n" in new
+
+    def test_inserts_into_existing_drawer(self):
+        # "Second idea" already has a drawer with :ADOPT:; the new :SLUG:
+        # is inserted just before :END:, with the drawer's indent.
+        new = set_idea_slug(STAGING_SAMPLE, "Second idea", "second-idea")
+        assert (
+            "** Second idea\n"
+            "   :PROPERTIES:\n"
+            "   :ADOPT: https://github.com/example/example/pull/99\n"
+            "   :SLUG: second-idea\n"
+            "   :END:\n"
+        ) in new
+
+    def test_noop_when_slug_already_matches(self):
+        once = set_idea_slug(STAGING_SAMPLE, "First idea", "first-idea")
+        twice = set_idea_slug(once, "First idea", "first-idea")
+        assert twice == once
+
+    def test_empty_slug_value_is_replaced(self):
+        # `:SLUG:` with no value is the "please suggest" sentinel — it
+        # should be replaced, not clobber-rejected.
+        text = (
+            "* Project\n"
+            "  :PROPERTIES:\n"
+            "  :REPO: https://x/y\n"
+            "  :END:\n"
+            "** Idea\n"
+            "   :PROPERTIES:\n"
+            "   :SLUG:\n"
+            "   :END:\n"
+        )
+        new = set_idea_slug(text, "Idea", "fresh-slug")
+        assert ":SLUG: fresh-slug\n" in new
+        # Only one :SLUG: line.
+        assert new.count(":SLUG:") == 1
+
+    def test_clobber_raises(self):
+        once = set_idea_slug(STAGING_SAMPLE, "First idea", "first-idea")
+        with pytest.raises(SlugClobberError):
+            set_idea_slug(once, "First idea", "different-slug")
+
+    def test_unknown_heading_raises(self):
+        with pytest.raises(ValueError, match="heading not found"):
+            set_idea_slug(STAGING_SAMPLE, "Does not exist", "nope")
+
+    def test_only_targets_level_2(self):
+        # A level-1 heading with the same text must not be matched.
+        text = (
+            "* Idea\n"
+            "  :PROPERTIES:\n"
+            "  :REPO: https://x/y\n"
+            "  :END:\n"
+            "** Idea\n"
+        )
+        new = set_idea_slug(text, "Idea", "idea-slug")
+        # The level-2 heading gained a drawer; the level-1 properties
+        # drawer is untouched (no :SLUG: line added there).
+        level1_block, _, level2_block = new.partition("** Idea")
+        assert ":SLUG:" not in level1_block
+        assert ":SLUG: idea-slug" in level2_block
+
+    def test_slug_regex_constants(self):
+        assert SLUG_RE.match("foo")
+        assert SLUG_RE.match("foo-bar-baz")
+        assert SLUG_RE.match("a")
+        assert SLUG_RE.match("a1")
+        assert not SLUG_RE.match("-foo")
+        assert not SLUG_RE.match("foo-")
+        assert not SLUG_RE.match("Foo")  # uppercase rejected
+        assert not SLUG_RE.match("foo_bar")  # underscore rejected
+        assert SLUG_MAX_LEN > 20
 
 
 class TestRemoveStagingEntry:

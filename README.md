@@ -366,7 +366,10 @@ optional properties drawer with `:ADOPT:`, `:COMPANION:`, and/or
   shorter or otherwise different slug. The slug is what the task
   file (`tasks/active/YYYY-MM-DD-<slug>.org`), the feature branch
   (`cloude/<slug>`), the worktree, and the tmux session
-  (`cloude-<slug>`) are all named after.
+  (`cloude-<slug>`) are all named after. Normally set automatically
+  by the staging-slug watcher (see [Slug suggestions](#slug-suggestions)
+  below), but you can hand-edit it too — a user-set `:SLUG:` is
+  preserved on subsequent watcher runs.
 
 All are optional; `/promote` reads them from the staging idea and
 forwards them via flags to the orchestrator. Heading text is never
@@ -408,6 +411,59 @@ falling back to a default `TODO` section. `/promote` skips them:
 
 You can delete TODOs when finished — there's no separate
 "completed" pile for them.
+
+### Slug suggestions
+
+By default, `/promote` derives a task's filesystem slug from the
+staging idea heading mechanically: lowercase, replace non-alphanumerics
+with `-`, collapse repeats. That works for short headings
+(`"Hook to auto-move COMPLETE files"` → `hook-to-auto-move-complete-files`)
+but produces unwieldy slugs for verbose ones.
+
+cloude ships a small background watcher that uses the host claude
+session itself to suggest concise slugs, written back as a `:SLUG:`
+property on each staging idea. Once an idea has a `:SLUG:`,
+`/promote` proposes that slug instead of the mechanical fallback
+(still asking you to confirm or override).
+
+The watcher is:
+
+- **Auto-armed** on every host claude session started in the cloude
+  repo, via a `SessionStart` hook in
+  [`.claude/settings.json`](.claude/settings.json) that nudges
+  claude to call the [`/suggest-slugs-watch`](.claude/commands/suggest-slugs-watch.md)
+  slash command on its first turn. The slash command in turn arms a
+  persistent `Monitor` that runs
+  [`bin/cloude-watch-staging-slugs`](bin/cloude-watch-staging-slugs).
+- **Singleton across sessions.** The watcher script holds a
+  non-blocking flock on `/tmp/cloude-watch-staging-slugs.lock`. In
+  one host session it runs normally; in additional concurrent
+  sessions arming is a near-no-op (the script logs to stderr and
+  exits). When the lock-holder session ends, recovery is either
+  opening a fresh host session (SessionStart re-fires) or running
+  `/suggest-slugs-watch` manually in any surviving session.
+- **Event-driven and cross-platform.** Uses the
+  [`watchdog`](https://pypi.org/project/watchdog/) library, which
+  picks the right OS primitive for native filesystem events
+  (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on
+  Windows). Each event triggers a re-check of
+  `bin/cloude-list-staging --slugless`. If there's any idea without
+  a `:SLUG:`, the watcher emits one notification line into the
+  chat, prompting the host claude to run
+  [`/suggest-slugs`](.claude/commands/suggest-slugs.md) — which
+  generates short kebab slugs for the slugless ideas and writes
+  them back via
+  [`bin/cloude-set-staging-slug`](bin/cloude-set-staging-slug).
+- **Idempotent.** A user-set `:SLUG:` is preserved (clobber-rejected);
+  an empty `:SLUG:` is the explicit "please suggest one" signal and
+  is replaced.
+
+No OS-level install step — `watchdog` is pinned in `pyproject.toml`
+and lands in `.venv-host/` on `make sync`. Set
+`CLOUDE_NO_SLUG_WATCH=1` in the environment to opt out entirely.
+
+You can also run `/suggest-slugs` manually at any time — the
+watcher isn't required for the on-demand path.
 
 ## Dashboard
 
@@ -572,6 +628,22 @@ you invoke by hand:
   `tasks/dropped/`. Force-drop is allowed from any non-terminal
   state; force-complete is not (COMPLETE requires the agent to have
   verified the merge).
+- **`/suggest-slugs-watch`** — Arm the staging-slug watcher in this
+  host session. Calls the `Monitor` tool with
+  `bin/cloude-watch-staging-slugs`, then sits idle until the watcher
+  emits a `STAGING_HAS_SLUGLESS_IDEAS` notification, at which point
+  the host claude session runs `/suggest-slugs` automatically. The
+  host-side `.claude/settings.json` auto-arms this via SessionStart,
+  so normally you don't invoke it by hand — invoke it only to
+  re-arm after a lock-holder session ends (see [Slug
+  suggestions](#slug-suggestions)).
+- **`/suggest-slugs`** — Generate `:SLUG:` properties for any
+  `tasks/staging.org` ideas that don't have one. Runs `bin/cloude-list-staging
+  --slugless`, generates a short kebab-case slug per heading
+  in-turn (the host claude IS the LLM doing the generation), and
+  writes each back via `bin/cloude-set-staging-slug`. Skips
+  user-set slugs (clobber-protected). Fired automatically by the
+  watcher's notifications, but also runnable on demand.
 
 **In-container** (run from inside the task's tmux session):
 
