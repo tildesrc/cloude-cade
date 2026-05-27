@@ -255,12 +255,19 @@ dependency, and runs on plain `python3`.
   `STAGING_HAS_SLUGLESS_IDEAS` on stdout each time
   `tasks/staging.org` ends up with an idea lacking a `:SLUG:`. The
   host-side `Monitor` armed by `/suggest-slugs-watch` consumes those
-  lines as notification turns that route to `/suggest-slugs`.
-  Singleton via non-blocking `flock -n` on
-  `/tmp/cloude-watch-staging-slugs.lock` — exactly one watcher
-  runs across concurrent host sessions; losers exit immediately
-  (no standby, no retry). Honors `CLOUDE_NO_SLUG_WATCH=1`.
-  Requires `inotifywait` (Debian/Ubuntu: `apt install inotify-tools`).
+  lines as notification turns that route to `/suggest-slugs`. Uses
+  the `watchdog` library for cross-platform native filesystem events
+  (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on
+  Windows) — no OS-level install step. Singleton via non-blocking
+  `fcntl.flock` on `/tmp/cloude-watch-staging-slugs.lock` — exactly
+  one watcher runs across concurrent host sessions; losers exit
+  immediately (no standby, no retry). A 200ms debouncer collapses
+  burst events from a single atomic-rename save into one
+  `--slugless` check. Polyglot Python (sh re-exec into
+  `bin/cloude-python`), so it runs under the shared cloude venv.
+  Honors `CLOUDE_NO_SLUG_WATCH=1`; `CLOUDE_SLUG_WATCH_LOCK` and
+  `CLOUDE_SLUG_WATCH_DEBOUNCE_S` override the lockfile path and
+  debounce delay respectively.
 - **`cloude-on-host-session-start`** — Host-side `SessionStart` hook
   (registered in `.claude/settings.json`). Emits a
   `hookSpecificOutput.additionalContext` JSON that tells claude to
@@ -494,9 +501,9 @@ fast. So instead the dependencies are pre-resolved into a venv on
 disk once and the hooks re-exec into its Python:
 
 - `pyproject.toml` + `uv.lock` at the repo root declare the shared
-  Python deps (currently `orgparse>=0.4` and `inotify_simple>=1.3;
-  sys_platform=='linux'`). One source of truth across host and
-  container.
+  Python deps (currently `orgparse>=0.4`, `inotify_simple>=1.3;
+  sys_platform=='linux'`, and `watchdog>=4`). One source of truth
+  across host and container.
 - `make sync` (host) runs `uv sync --frozen --no-install-project`
   into `./.venv-host/`.
 - The Dockerfile runs the same `uv sync` against the same lockfile

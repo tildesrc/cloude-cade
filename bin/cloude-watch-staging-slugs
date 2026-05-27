@@ -1,80 +1,210 @@
-#!/bin/bash
-# Host-side staging-slug watcher.
-#
-# Long-running monitor: emits exactly one stdout line
-# (STAGING_HAS_SLUGLESS_IDEAS) every time tasks/staging.org changes
-# in a way that leaves at least one idea sub-heading lacking a
-# `:SLUG:` property. The host claude session arms this via Monitor
-# under `/suggest-slugs-watch`; each emitted line lands as a fresh
-# turn in the chat, and `/suggest-slugs` writes the generated slugs
-# back via bin/cloude-set-staging-slug.
-#
-# Singleton via non-blocking flock — if another host session already
-# holds /tmp/cloude-watch-staging-slugs.lock, this process exits 0
-# immediately. No retry, no standby. After the lock-holder session
-# ends, recovery is one of: open a fresh host session (its
-# SessionStart hook re-arms) or run `/suggest-slugs-watch` in any
-# still-open session.
-#
-# Env knobs:
-#   CLOUDE_NO_SLUG_WATCH  non-empty → exit 0 immediately, no watching.
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this script runs under the shared cloude venv (watchdog + orgparse).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+from __future__ import annotations
+__doc__ = """Host-side staging-slug watcher (cross-platform).
 
-set -euo pipefail
+Long-running monitor: emits exactly one stdout line
+(`STAGING_HAS_SLUGLESS_IDEAS`) every time `tasks/staging.org` ends
+up with an idea sub-heading that lacks a `:SLUG:` property. The
+host claude session arms this via `Monitor` under
+`/suggest-slugs-watch`; each emitted line lands as a fresh turn in
+the chat, and `/suggest-slugs` writes the generated slugs back via
+`bin/cloude-set-staging-slug`.
 
-if [ -n "${CLOUDE_NO_SLUG_WATCH:-}" ]; then
-    echo "cloude-watch-staging-slugs: CLOUDE_NO_SLUG_WATCH set; exiting." >&2
-    exit 0
-fi
+Cross-platform via `watchdog`: inotify on Linux, FSEvents on macOS,
+ReadDirectoryChangesW on Windows. No `inotifywait` / `fswatch`
+install step.
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-CLOUDE_ROOT="${CLOUDE_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
-STAGING="$CLOUDE_ROOT/tasks/staging.org"
-LIST_STAGING="$CLOUDE_ROOT/bin/cloude-list-staging"
-LOCKFILE="${CLOUDE_SLUG_WATCH_LOCK:-/tmp/cloude-watch-staging-slugs.lock}"
+Singleton via non-blocking `fcntl.flock` — if another host session
+already holds `/tmp/cloude-watch-staging-slugs.lock`, this process
+exits 0 immediately. No retry, no standby. After the lock-holder
+session ends, recovery is one of: open a fresh host session (its
+SessionStart hook re-arms) or run `/suggest-slugs-watch` in any
+still-open session.
 
-if [ ! -f "$STAGING" ]; then
-    echo "cloude-watch-staging-slugs: no staging file at $STAGING; exiting." >&2
-    exit 0
-fi
+Env knobs:
+  CLOUDE_NO_SLUG_WATCH         non-empty → exit 0 immediately.
+  CLOUDE_SLUG_WATCH_LOCK       override the lockfile path
+                               (default /tmp/cloude-watch-staging-slugs.lock).
+  CLOUDE_SLUG_WATCH_DEBOUNCE_S debounce delay in seconds
+                               (default 0.2).
+"""
 
-if ! command -v inotifywait >/dev/null 2>&1; then
-    echo "cloude-watch-staging-slugs: inotifywait is required (apt install inotify-tools)." >&2
-    exit 1
-fi
+import fcntl
+import os
+import signal
+import subprocess
+import sys
+import threading
+from pathlib import Path
 
-# Acquire the singleton lock non-blockingly. If another session has
-# it, abandon — no retry, no standby (see Architecture → Handover).
-exec 200>"$LOCKFILE"
-if ! flock -n 200; then
-    echo "cloude-watch-staging-slugs: another session holds $LOCKFILE; exiting." >&2
-    exit 0
-fi
+try:
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
+    from watchdog.observers import Observer
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "cloude-watch-staging-slugs: watchdog is required.\n"
+        "Run `make sync` from the cloude repo root to install pinned deps.\n"
+    )
+    sys.exit(1)
 
-emit_if_slugless() {
-    # Print exactly one notification line when staging has any idea
-    # without a `:SLUG:`. The handler ignores anything else, so we
-    # don't enumerate the slugless ideas here — `/suggest-slugs`
-    # re-runs `--slugless` to get the fresh list.
-    if "$LIST_STAGING" --slugless 2>/dev/null | grep -q .; then
-        echo "STAGING_HAS_SLUGLESS_IDEAS"
-    fi
-}
 
-# Initial check at arm-time — pick up slugless ideas that pre-date
-# this watcher.
-emit_if_slugless
+CLOUDE_ROOT = Path(
+    os.environ.get("CLOUDE_ROOT") or Path(__file__).resolve().parent.parent
+)
+STAGING = CLOUDE_ROOT / "tasks" / "staging.org"
+LIST_STAGING = CLOUDE_ROOT / "bin" / "cloude-list-staging"
+LOCKFILE = Path(
+    os.environ.get("CLOUDE_SLUG_WATCH_LOCK", "/tmp/cloude-watch-staging-slugs.lock")
+)
+DEBOUNCE_S = float(os.environ.get("CLOUDE_SLUG_WATCH_DEBOUNCE_S", "0.2"))
 
-# Watch loop. We watch the parent directory (not the file directly)
-# because atomic-rename saves — both Emacs and our own
-# `cloude-set-staging-slug` (which uses os.replace) — swap the file's
-# inode. inotifywait on a file path follows the *original* inode and
-# would silently stop seeing events after the first save. Filtering
-# by filename inside the directory watch is the standard workaround.
-STAGING_DIR="$(dirname "$STAGING")"
-STAGING_FILE="$(basename "$STAGING")"
-inotifywait -m -q -e close_write,moved_to --format '%f' "$STAGING_DIR" |
-    while read -r filename; do
-        [ "$filename" = "$STAGING_FILE" ] || continue
-        sleep 0.2  # coalesce burst events from a single editor save
-        emit_if_slugless
-    done
+
+def emit_if_slugless() -> None:
+    """Run `cloude-list-staging --slugless`; emit one line iff non-empty.
+
+    The handler downstream (`/suggest-slugs`) re-runs the same query to
+    get the fresh list, so this script only needs to signal *that*
+    there's work, not enumerate it.
+    """
+    try:
+        result = subprocess.run(
+            [str(LIST_STAGING), "--slugless"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        sys.stderr.write(
+            f"cloude-watch-staging-slugs: failed to run "
+            f"{LIST_STAGING}: {exc}\n"
+        )
+        return
+    if result.stdout.strip():
+        print("STAGING_HAS_SLUGLESS_IDEAS", flush=True)
+
+
+class _Debouncer:
+    """Coalesce burst events into one trailing call after `delay` seconds.
+
+    Watchdog dispatches every filesystem event individually, so an
+    atomic-rename save (Emacs, `cloude-set-staging-slug`'s
+    `os.replace`) can yield multiple events in quick succession.
+    Each `trigger()` resets a daemon `Timer`; the action only fires
+    once the events go quiet for `delay` seconds.
+    """
+
+    def __init__(self, delay: float, action) -> None:
+        self._delay = delay
+        self._action = action
+        self._timer: threading.Timer | None = None
+        self._lock = threading.Lock()
+
+    def trigger(self) -> None:
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(self._delay, self._action)
+            self._timer.daemon = True
+            self._timer.start()
+
+
+class _StagingHandler(FileSystemEventHandler):
+    """Watchdog handler that triggers the debouncer on staging.org events.
+
+    We watch the *parent directory* (not the file path) because
+    atomic-rename writes swap the file's inode; both inotify and
+    FSEvents would otherwise drop events on the new inode. Filtering
+    by basename inside the handler keeps the watcher pinned to the
+    file by name rather than inode.
+    """
+
+    def __init__(self, debouncer: _Debouncer, target_name: str) -> None:
+        self._debouncer = debouncer
+        self._target = target_name
+
+    def _matches(self, path: str) -> bool:
+        return os.path.basename(path) == self._target
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        if event.is_directory:
+            return
+        # Cover creation (atomic-rename's last step), modification
+        # (in-place writes), and moves (catches the dest of a move).
+        if event.event_type not in ("modified", "created", "moved", "closed"):
+            return
+        # For `moved` events the destination is what matters.
+        path = getattr(event, "dest_path", "") or event.src_path
+        if self._matches(path):
+            self._debouncer.trigger()
+
+
+def _acquire_lock() -> int | None:
+    """Acquire the singleton lock non-blockingly.
+
+    Returns the fd on success, or None if another process holds the
+    lock. The fd is left open for the lifetime of the process — kernel
+    cleans it up on exit, releasing the lock.
+    """
+    fd = os.open(str(LOCKFILE), os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def main() -> int:
+    if os.environ.get("CLOUDE_NO_SLUG_WATCH"):
+        sys.stderr.write(
+            "cloude-watch-staging-slugs: CLOUDE_NO_SLUG_WATCH set; exiting.\n"
+        )
+        return 0
+    if not STAGING.is_file():
+        sys.stderr.write(
+            f"cloude-watch-staging-slugs: no staging file at {STAGING}; exiting.\n"
+        )
+        return 0
+
+    lock_fd = _acquire_lock()
+    if lock_fd is None:
+        sys.stderr.write(
+            f"cloude-watch-staging-slugs: another session holds "
+            f"{LOCKFILE}; exiting.\n"
+        )
+        return 0
+
+    # Initial check at arm-time — pick up slugless ideas that pre-date
+    # this watcher.
+    emit_if_slugless()
+
+    debouncer = _Debouncer(DEBOUNCE_S, emit_if_slugless)
+    observer = Observer()
+    observer.schedule(
+        _StagingHandler(debouncer, STAGING.name),
+        str(STAGING.parent),
+        recursive=False,
+    )
+    observer.start()
+
+    # Sleep forever (Monitor terminates this process when the session
+    # ends or the user stops it). signal.pause() is POSIX-portable;
+    # SIGTERM / SIGINT both wake it and let the finally block run.
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    try:
+        stop.wait()
+    finally:
+        observer.stop()
+        observer.join()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

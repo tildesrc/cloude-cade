@@ -438,8 +438,11 @@ The watcher is:
   exits). When the lock-holder session ends, recovery is either
   opening a fresh host session (SessionStart re-fires) or running
   `/suggest-slugs-watch` manually in any surviving session.
-- **Event-driven.** `inotifywait` on `tasks/staging.org` (close-write
-  / modify); each event triggers a re-check of
+- **Event-driven and cross-platform.** Uses the
+  [`watchdog`](https://pypi.org/project/watchdog/) library, which
+  picks the right OS primitive for native filesystem events
+  (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on
+  Windows). Each event triggers a re-check of
   `bin/cloude-list-staging --slugless`. If there's any idea without
   a `:SLUG:`, the watcher emits one notification line into the
   chat, prompting the host claude to run
@@ -451,9 +454,9 @@ The watcher is:
   an empty `:SLUG:` is the explicit "please suggest one" signal and
   is replaced.
 
-Prerequisites: `inotify-tools` must be installed on the host (`apt
-install inotify-tools` on Debian/Ubuntu). Set `CLOUDE_NO_SLUG_WATCH=1`
-in the environment to opt out entirely.
+No OS-level install step — `watchdog` is pinned in `pyproject.toml`
+and lands in `.venv-host/` on `make sync`. Set
+`CLOUDE_NO_SLUG_WATCH=1` in the environment to opt out entirely.
 
 You can also run `/suggest-slugs` manually at any time — the
 watcher isn't required for the on-demand path.
