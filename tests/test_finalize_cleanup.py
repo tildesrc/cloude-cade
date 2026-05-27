@@ -167,14 +167,18 @@ def _git(cwd: Path, *args: str) -> None:
 
 @pytest.fixture
 def source_clone(tmp_path: Path) -> Path:
-    """A real git repo with one initial commit on the default branch."""
+    """A real git repo with one initial commit on the default branch.
+
+    Configures a local identity *before* the first commit — CI runners
+    typically have no global ``user.email`` / ``user.name`` set, so a
+    bare ``git commit`` there would fail with exit 128.
+    """
     clone = tmp_path / "source-clone"
     clone.mkdir()
     _git(clone, "init", "-q", "-b", "main")
-    _git(clone, "commit", "-q", "--allow-empty", "-m", "initial")
-    # Stable identity so commit hooks don't error on user.email lookups.
     _git(clone, "config", "user.email", "test@example.invalid")
     _git(clone, "config", "user.name", "Test")
+    _git(clone, "commit", "-q", "--allow-empty", "-m", "initial")
     return clone
 
 
