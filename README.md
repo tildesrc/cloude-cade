@@ -174,11 +174,15 @@ session are all named after — to the system clipboard, ready to paste
 into a command.
 
 Press `P` on a highlighted STAGING row to promote it without leaving
-the dashboard. Curses suspends, `bin/cloude-promote` runs the full
-chain (gh discovery + worktree + draft PR + tmux session), and the
-dashboard returns once you press Enter. The new ACTIVE row shows up
-on the next reload; press `t` on it to attach to the new task's tmux
-session.
+the dashboard. `bin/cloude-promote` runs the full chain (gh discovery
++ worktree + draft PR + tmux session) and its stdout/stderr stream
+live into a centered modal overlay drawn over the dashboard — the
+underlying rows stay visible at the margins. The modal shows a
+`running… (Ns)` footer while the chain is in flight and sticks around
+on completion with the full output (PR URL, task-file path, etc.) and
+an `exit <N> — Enter/q to close` footer; `Enter`, `q`, or `Esc`
+dismisses it. The new ACTIVE row shows up on the next reload; press
+`t` on it to attach to the new task's tmux session.
 
 ```sh
 bin/cloude-dash    # /: search · p: PR · t: switch to task · c: copy slug · f: finalize · r: reload · q: quit
