@@ -639,6 +639,7 @@ _FINALIZE_EXIT_MESSAGES: dict[int, str] = {
     12: "worktree dirty / locked",
     13: "DinD volume in use",
     14: "worktree has foreign-owned files",
+    15: "PR not accessible",
     20: "gh pr close failed",
     21: "task-file move failed",
     22: "cloude-task-info failed",
@@ -665,6 +666,10 @@ _FINALIZE_OVERRIDES: dict[int, tuple[str, str]] = {
     14: (
         "Worktree has foreign-owned files. Nuke via 'docker run --user root'? [y/N] ",
         "--force-root",
+    ),
+    15: (
+        "PR not accessible (gh pr view failed). Proceed with cleanup anyway? [y/N] ",
+        "--force-pr-absent",
     ),
 }
 

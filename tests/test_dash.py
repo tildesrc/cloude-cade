@@ -365,7 +365,7 @@ class TestFinalizeExitMessages:
     # Every exit code documented in cloude-finalize-cleanup's usage
     # block as of this commit. Drives the completeness check below.
     _DOCUMENTED_CODES = frozenset(
-        {10, 11, 12, 13, 14, 20, 21, 22, 23, 25, 26, 30}
+        {10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 25, 26, 30}
     )
 
     def test_covers_every_documented_exit_code(self, dash):

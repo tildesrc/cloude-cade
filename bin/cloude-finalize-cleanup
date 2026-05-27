@@ -17,7 +17,9 @@
 # Judgment-call cases bail with distinct exit codes so the calling
 # skill can prompt the user and rerun with the matching override:
 #
-#   10 — TODO=COMPLETE but the PR is not in state MERGED.
+#   10 — TODO=COMPLETE but the PR is accessible and not in state
+#        MERGED. Safety guard against a premature COMPLETE flip; not
+#        overridable here — fix the task heading and re-run.
 #   11 — TODO is neither COMPLETE nor DROPPED. Pass --force-drop to
 #        flip the keyword to DROPPED and proceed.
 #   12 — Worktree removal failed (dirty / locked). Pass
@@ -28,6 +30,17 @@
 #        from in-container DinD test runs), which the host user can't
 #        unlink. Pass --force-root to nuke the dir via a privileged
 #        `docker run --user root` step (implies --force-worktree).
+#   15 — TODO=COMPLETE but the PR is not accessible at all (gh pr view
+#        exited nonzero: repo deleted, auth lost, network failure).
+#        Pass --force-pr-absent to proceed with cleanup anyway. For
+#        DROPPED / forced-drop, an inaccessible PR is tolerated
+#        silently (the close step is skipped).
+#
+# Idempotency: tmux session, DinD volume, local branch, and worktree
+# (both the directory and the source clone's bookkeeping) all tolerate
+# being already absent — finalize succeeds on a partially-cleaned-up
+# task and reports "absent" in the summary for whichever resource was
+# already gone.
 #
 # Anything else is a hard failure: 20 (gh pr close), 21 (file move),
 # 22 (task-info), 23 (heading rewrite), 25 (worktree remove failed
@@ -49,15 +62,19 @@ Options:
                      user (e.g. root, from in-container DinD test runs)
                      via 'docker run --rm --user root … rm -rf'.
                      Implies --force-worktree.
+  --force-pr-absent  Proceed even if 'gh pr view' can't reach the PR
+                     (COMPLETE-mode only — DROPPED tolerates this
+                     silently).
   --skip-volume      Skip DinD volume removal.
 
 Exit codes:
    0  success
-  10  PR not MERGED (COMPLETE-mode only)
+  10  PR not MERGED (COMPLETE-mode only; PR is accessible)
   11  TODO not COMPLETE/DROPPED, --force-drop not given
   12  worktree dirty / locked, --force-worktree not given
   13  DinD volume in use, --skip-volume not given
   14  worktree contains foreign-owned files, --force-root not given
+  15  PR not accessible (COMPLETE-mode only), --force-pr-absent not given
   20+ other failure (stderr names the step)
   30  argument validation
 EOF
@@ -72,17 +89,19 @@ TASK_FILE=""
 FORCE_DROP=false
 FORCE_WORKTREE=false
 FORCE_ROOT=false
+FORCE_PR_ABSENT=false
 SKIP_VOLUME=false
 
 while (($#)); do
     case "$1" in
-        --force-drop)     FORCE_DROP=true ;;
-        --force-worktree) FORCE_WORKTREE=true ;;
-        --force-root)     FORCE_ROOT=true; FORCE_WORKTREE=true ;;
-        --skip-volume)    SKIP_VOLUME=true ;;
-        -h|--help)        usage; exit 0 ;;
-        --)               shift; TASK_FILE="$1" ;;
-        -*)               echo "ERROR: unknown flag: $1" >&2; usage >&2; exit 30 ;;
+        --force-drop)      FORCE_DROP=true ;;
+        --force-worktree)  FORCE_WORKTREE=true ;;
+        --force-root)      FORCE_ROOT=true; FORCE_WORKTREE=true ;;
+        --force-pr-absent) FORCE_PR_ABSENT=true ;;
+        --skip-volume)     SKIP_VOLUME=true ;;
+        -h|--help)         usage; exit 0 ;;
+        --)                shift; TASK_FILE="$1" ;;
+        -*)                echo "ERROR: unknown flag: $1" >&2; usage >&2; exit 30 ;;
         *)
             if [[ -n "$TASK_FILE" ]]; then
                 echo "ERROR: extra positional arg: $1" >&2
@@ -121,29 +140,76 @@ eval "$info_out"
 # $SLUG $REPO_NAME $SOURCE_CLONE $TMUX_SESSION $DIND_VOLUME $CLOUDE_ROOT
 
 # --- Step 2: decide action from $TODO --------------------------------------
+#
+# PR handling has two independent signals:
+#   - "accessible": did 'gh pr view' return at all?
+#   - "state":      the .state field (only meaningful when accessible).
+#
+# COMPLETE requires accessible && state=MERGED — accessible-but-unmerged
+# is a safety guard (exit 10, not overridable here), inaccessible is the
+# --force-pr-absent override (exit 15). DROPPED / forced-drop tolerate
+# inaccessible silently (the close step is just skipped).
+
+# Sets globals pr_accessible (true/false) and pr_state (state string when
+# accessible, empty otherwise). The 'if assign; then' shape keeps set -e
+# from tripping on gh's nonzero exit.
+probe_pr_state() {
+    if pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null)"; then
+        pr_accessible=true
+    else
+        pr_accessible=false
+        pr_state=""
+    fi
+}
+
+# Close the PR if it's accessible and OPEN; record the outcome in
+# PR_RESULT for the summary block. Shared between the DROPPED case and
+# the forced-drop branch — the close-if-OPEN logic is identical.
+maybe_close_pr_for_drop() {
+    if ! $pr_accessible; then
+        PR_RESULT="not accessible"
+        return
+    fi
+    if [[ "$pr_state" == "OPEN" ]]; then
+        if ! gh pr close "$PR" --delete-branch=false >/dev/null; then
+            echo "ERROR: gh pr close failed for $PR" >&2
+            exit 20
+        fi
+        PR_RESULT="closed"
+    else
+        # Already CLOSED / MERGED — nothing to do, just label it.
+        PR_RESULT="already ${pr_state,,}"
+    fi
+}
 
 FORCED_DROP=false
+PR_RESULT=""
+pr_accessible=false
+pr_state=""
+
 case "$TODO" in
     COMPLETE)
-        # Verify PR is actually MERGED before going further.
-        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
-        if [[ "$pr_state" != "MERGED" ]]; then
-            echo "ERROR: task is COMPLETE but PR is in state: ${pr_state:-<unknown>}" >&2
-            echo "       fix: set the TODO back to MERGING in $TASK_FILE and re-run" >&2
-            echo "       once the merge actually lands." >&2
-            exit 10
+        probe_pr_state
+        if $pr_accessible; then
+            if [[ "$pr_state" != "MERGED" ]]; then
+                echo "ERROR: task is COMPLETE but PR is in state: $pr_state" >&2
+                echo "       fix: set the TODO back to MERGING in $TASK_FILE and re-run" >&2
+                echo "       once the merge actually lands." >&2
+                exit 10
+            fi
+            PR_RESULT="confirmed MERGED"
+        elif $FORCE_PR_ABSENT; then
+            PR_RESULT="not accessible (forced)"
+        else
+            echo "ERROR: 'gh pr view $PR' failed — PR is not accessible" >&2
+            echo "       (repo deleted, auth lost, or network failure)." >&2
+            echo "       pass --force-pr-absent to proceed with cleanup anyway." >&2
+            exit 15
         fi
         ;;
     DROPPED)
-        # Close the PR if it isn't already closed/merged. gh pr close on
-        # an already-closed PR errors out, so check state first.
-        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
-        if [[ "$pr_state" == "OPEN" ]]; then
-            if ! gh pr close "$PR" --delete-branch=false >/dev/null; then
-                echo "ERROR: gh pr close failed for $PR" >&2
-                exit 20
-            fi
-        fi
+        probe_pr_state
+        maybe_close_pr_for_drop
         ;;
     *)
         if ! $FORCE_DROP; then
@@ -164,14 +230,8 @@ case "$TODO" in
         fi
         TODO=DROPPED
         FORCED_DROP=true
-        # Close the PR for the drop, same logic as the DROPPED branch.
-        pr_state="$(gh pr view "$PR" --json state -q .state 2>/dev/null || true)"
-        if [[ "$pr_state" == "OPEN" ]]; then
-            if ! gh pr close "$PR" --delete-branch=false >/dev/null; then
-                echo "ERROR: gh pr close failed for $PR" >&2
-                exit 20
-            fi
-        fi
+        probe_pr_state
+        maybe_close_pr_for_drop
         ;;
 esac
 
@@ -185,15 +245,32 @@ fi
 
 # --- Step 4: remove worktree -----------------------------------------------
 #
-# Escalation tiers:
-#   Tier 1: 'git worktree remove [--force]' as usual.
-#   Tier 2: on failure, if the worktree contains foreign-owned files
-#           (e.g. root, written by in-container DinD test runs), this
-#           is the --force-root case — either bail with exit 14, or
-#           nuke via 'docker run --rm --user root … rm -rf'.
-#   Tier 3: on failure with no foreign-owned files, fall back to the
-#           existing exit 12 (no --force-worktree) / 25 (had --force-
-#           worktree, still failed for some other reason) paths.
+# Tier 0: if both the worktree dir AND the source clone's bookkeeping
+#         entry are gone, the worktree was already cleaned up
+#         (externally, or by a previous partial run). Skip — idempotent.
+#         (Note: "dir gone, bookkeeping present" doesn't need a special
+#         case; 'git worktree remove' silently prunes that one.)
+# Tier 1: 'git worktree remove [--force]' as usual.
+# Tier 2: on failure, if the worktree contains foreign-owned files
+#         (e.g. root, written by in-container DinD test runs), this
+#         is the --force-root case — either bail with exit 14, or
+#         nuke via 'docker run --rm --user root … rm -rf'.
+# Tier 3: on failure with no foreign-owned files, fall back to the
+#         existing exit 12 (no --force-worktree) / 25 (had --force-
+#         worktree, still failed for some other reason) paths.
+
+# True iff $SOURCE_CLONE has a 'git worktree list' entry for $WORKTREE.
+# Used by the Tier-0 absent-check; the dir-on-disk check is the other
+# half. Returns 1 if the source clone itself is missing — paired with
+# '! -d "$WORKTREE"' this is exactly the fully-absent signal.
+worktree_registered() {
+    [[ -d "$SOURCE_CLONE" ]] || return 1
+    git -C "$SOURCE_CLONE" worktree list --porcelain 2>/dev/null \
+        | awk -v p="$WORKTREE" '
+            /^worktree / { if ($2 == p) { found = 1; exit } }
+            END { exit !found }
+        '
+}
 
 remove_worktree() {
     local extra=()
@@ -230,7 +307,11 @@ nuke_worktree_as_root() {
 }
 
 ROOT_CLEANED=false
-if ! err="$(remove_worktree 2>&1)"; then
+WORKTREE_ABSENT=false
+if [[ ! -d "$WORKTREE" ]] && ! worktree_registered; then
+    # Tier 0: nothing for git or rm to do — already cleaned up.
+    WORKTREE_ABSENT=true
+elif ! err="$(remove_worktree 2>&1)"; then
     foreign="$(foreign_owned_count)"
     if (( foreign > 0 )); then
         # Tier 2: foreign-owned files (typically root, from DinD).
@@ -276,11 +357,14 @@ if ! err="$(remove_worktree 2>&1)"; then
     fi
 fi
 
-WORKTREE_RESULT="removed"
-if $ROOT_CLEANED; then
+if $WORKTREE_ABSENT; then
+    WORKTREE_RESULT="absent"
+elif $ROOT_CLEANED; then
     WORKTREE_RESULT="removed (forced; root cleanup)"
 elif $FORCE_WORKTREE; then
     WORKTREE_RESULT="removed (forced)"
+else
+    WORKTREE_RESULT="removed"
 fi
 
 # --- Step 5: remove DinD volume --------------------------------------------
@@ -337,5 +421,5 @@ tmux session $TMUX_SESSION: $( $TMUX_KILLED && echo killed || echo "was not runn
 Worktree $WORKTREE: $WORKTREE_RESULT
 DinD volume $DIND_VOLUME: $VOLUME_REMOVED
 Local branch $BRANCH: $BRANCH_RESULT
-PR $PR: $( [[ "$TODO" == "COMPLETE" ]] && echo "confirmed MERGED" || echo "closed" )
+PR $PR: $PR_RESULT
 EOF
