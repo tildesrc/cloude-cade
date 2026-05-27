@@ -553,6 +553,11 @@ reload (auto or `r`) it stays on whatever task you had selected. If
 that task disappears entirely, the highlight falls back to the first
 row.
 
+Resizing the terminal redraws the dashboard at the new dimensions, and
+any open modal (promote, finalize, search prompt) re-flows in place
+with its margins repainted, so a SIGWINCH never leaves stale content
+on screen.
+
 ```sh
 bin/cloude-dash
 ```

@@ -432,3 +432,161 @@ class TestFinalizeStatusMessage:
             exit_code=99, aborted=False, title="my task"
         )
         assert msg == "finalize failed: exit 99"
+
+
+class TestHandleResize:
+    """`_handle_resize` is the small helper the dashboard calls on every
+    `curses.KEY_RESIZE`. The contract is:
+
+    * refresh curses' cached LINES/COLS so subsequent ``getmaxyx`` calls
+      return the new dimensions,
+    * clear stdscr so the next draw paints a clean canvas at the new
+      size (no stale rows leaking from the old size),
+    * refresh stdscr so the clear becomes visible immediately.
+
+    Without this, modal helpers that redraw before blocking would paint
+    on top of the old canvas at the old getmaxyx, which is exactly the
+    bug this whole task is fixing.
+    """
+
+    def test_calls_update_lines_cols_then_erase_then_refresh(
+        self, dash, monkeypatch
+    ):
+        import curses
+        from unittest.mock import MagicMock
+
+        order: list[str] = []
+        monkeypatch.setattr(
+            curses, "update_lines_cols", lambda: order.append("update_lines_cols")
+        )
+        stdscr = MagicMock()
+        stdscr.erase.side_effect = lambda: order.append("erase")
+        stdscr.refresh.side_effect = lambda: order.append("refresh")
+
+        dash._handle_resize(stdscr)
+
+        assert order == ["update_lines_cols", "erase", "refresh"]
+
+    def test_tolerates_missing_update_lines_cols(self, dash, monkeypatch):
+        # Defensive: `update_lines_cols` has been in CPython since 3.5
+        # and this script requires 3.11, but the helper guards with
+        # hasattr so it can't break on a stripped-down curses build.
+        import curses
+        from unittest.mock import MagicMock
+
+        # Remove the attribute and assert _handle_resize still clears.
+        monkeypatch.delattr(curses, "update_lines_cols", raising=False)
+        stdscr = MagicMock()
+        dash._handle_resize(stdscr)
+        stdscr.erase.assert_called_once()
+        stdscr.refresh.assert_called_once()
+
+
+class TestModalReadYnResize:
+    """`_modal_read_yn` blocks on stdscr.getch() until y/Y or
+    n/N/Esc/q/Enter. The resize-handling contract is:
+
+    * `redraw` is called once before the first getch (prompt visibility),
+    * on a `curses.KEY_RESIZE` it calls `_handle_resize` and then
+      `redraw` again before continuing — so the modal re-flows at the
+      new terminal dimensions instead of staying frozen at old size,
+    * idle ticks (`ch == -1`) do NOT re-call `redraw` — the modal
+      contents are stable between resizes / keystrokes.
+
+    Driven via a fake stdscr that returns a scripted sequence of getch
+    return values.
+    """
+
+    def _fake_stdscr(self, getch_returns: list[int]):
+        from unittest.mock import MagicMock
+
+        stdscr = MagicMock()
+        stdscr.getch.side_effect = list(getch_returns)
+        return stdscr
+
+    def test_redraws_once_on_initial_prompt(self, dash):
+        from unittest.mock import MagicMock
+
+        stdscr = self._fake_stdscr([ord("y")])
+        redraw = MagicMock()
+        assert dash._modal_read_yn(stdscr, redraw) is True
+        assert redraw.call_count == 1
+
+    def test_redraws_again_on_key_resize(self, dash, monkeypatch):
+        import curses
+        from unittest.mock import MagicMock
+
+        handle_resize = MagicMock()
+        monkeypatch.setattr(dash, "_handle_resize", handle_resize)
+        stdscr = self._fake_stdscr([curses.KEY_RESIZE, ord("y")])
+        redraw = MagicMock()
+
+        assert dash._modal_read_yn(stdscr, redraw) is True
+        # Once before the loop, once for the resize event.
+        assert redraw.call_count == 2
+        handle_resize.assert_called_once_with(stdscr)
+
+    def test_idle_tick_does_not_redraw(self, dash):
+        from unittest.mock import MagicMock
+
+        # -1 from getch is the idle-tick (curses timeout). It should
+        # NOT trigger a redraw — the modal isn't changing while we
+        # wait. (If it did, every 500ms idle would flicker the screen.)
+        stdscr = self._fake_stdscr([-1, -1, ord("n")])
+        redraw = MagicMock()
+        assert dash._modal_read_yn(stdscr, redraw) is False
+        assert redraw.call_count == 1
+
+    def test_returns_false_on_n_q_esc_enter(self, dash):
+        import curses
+        from unittest.mock import MagicMock
+
+        for ch in (
+            ord("n"), ord("N"), ord("q"), 27,
+            curses.KEY_ENTER, 10, 13,
+        ):
+            stdscr = self._fake_stdscr([ch])
+            assert dash._modal_read_yn(stdscr, MagicMock()) is False
+
+
+class TestModalWaitDismissResize:
+    """`_modal_wait_dismiss` blocks until q/Esc/Enter. Same
+    resize-handling contract as `_modal_read_yn`: initial redraw,
+    redraw again on KEY_RESIZE, no redraw on idle ticks.
+    """
+
+    def _fake_stdscr(self, getch_returns: list[int]):
+        from unittest.mock import MagicMock
+
+        stdscr = MagicMock()
+        stdscr.getch.side_effect = list(getch_returns)
+        return stdscr
+
+    def test_redraws_on_initial_call_and_returns_on_dismiss(self, dash):
+        from unittest.mock import MagicMock
+
+        stdscr = self._fake_stdscr([ord("q")])
+        redraw = MagicMock()
+        dash._modal_wait_dismiss(stdscr, redraw)
+        assert redraw.call_count == 1
+
+    def test_redraws_again_on_key_resize(self, dash, monkeypatch):
+        import curses
+        from unittest.mock import MagicMock
+
+        handle_resize = MagicMock()
+        monkeypatch.setattr(dash, "_handle_resize", handle_resize)
+        stdscr = self._fake_stdscr([curses.KEY_RESIZE, ord("q")])
+        redraw = MagicMock()
+
+        dash._modal_wait_dismiss(stdscr, redraw)
+        assert redraw.call_count == 2
+        handle_resize.assert_called_once_with(stdscr)
+
+    def test_idle_tick_does_not_redraw(self, dash):
+        from unittest.mock import MagicMock
+
+        stdscr = self._fake_stdscr([-1, -1, 27])  # Esc
+        redraw = MagicMock()
+        dash._modal_wait_dismiss(stdscr, redraw)
+        assert redraw.call_count == 1
