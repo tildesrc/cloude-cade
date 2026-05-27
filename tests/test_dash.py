@@ -12,6 +12,7 @@ not covered — they sit behind ``main()`` and ``_run()``.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -229,6 +230,64 @@ class TestTaskKey:
         t1 = dash._load_single_task_file(before, dash.ACTIVE)
         t2 = dash._load_single_task_file(after, dash.RECENT)
         assert dash._task_key(t1) == dash._task_key(t2)
+
+
+class TestNewestActiveRowIndex:
+    """The `P` keypath lands the highlight on the just-promoted ACTIVE
+    row by picking the ACTIVE ROW_TASK with the freshest `Task.ctime`.
+    The promote chain's last step writes `tasks/active/<date>-<slug>.org`,
+    so that file's ctime overwhelmingly wins. The helper isolates the
+    pick logic so the `P` branch in `_run` stays a one-liner.
+    """
+
+    @staticmethod
+    def _task(dash, section, name, ctime):
+        return dash.Task(
+            section=section,
+            state="ITERATING" if section == dash.ACTIVE else "COMPLETE",
+            tag="agent",
+            title=name,
+            pr_url=None,
+            repo=None,
+            path=Path("/tmp") / name,
+            ctime=ctime,
+        )
+
+    def test_returns_index_of_active_row_with_max_ctime(self, dash):
+        a1 = self._task(dash, dash.ACTIVE, "a1.org", ctime=100.0)
+        a2 = self._task(dash, dash.ACTIVE, "a2.org", ctime=200.0)  # freshest
+        a3 = self._task(dash, dash.ACTIVE, "a3.org", ctime=150.0)
+        rows = [
+            (dash.ROW_HEADER, "ACTIVE (3)"),
+            (dash.ROW_TASK, a1),
+            (dash.ROW_TASK, a2),
+            (dash.ROW_TASK, a3),
+        ]
+        assert dash._newest_active_row_index(rows) == 2
+
+    def test_returns_none_when_no_active_rows(self, dash):
+        # Filter that hides ACTIVE collapses the section entirely — the
+        # helper sees no ACTIVE ROW_TASKs and signals "leave the
+        # selection wherever reload's fallback put it".
+        rows = [
+            (dash.ROW_HEADER, "STAGING (1)"),
+            (dash.ROW_TASK, self._task(dash, dash.STAGING, "idea.org", ctime=10.0)),
+        ]
+        assert dash._newest_active_row_index(rows) is None
+
+    def test_ignores_recent_rows_with_fresher_ctime(self, dash):
+        # A just-finalized task lives in completed/ with a very fresh
+        # ctime from the active/->completed/ rename. The helper must
+        # not jump the cursor onto it.
+        active = self._task(dash, dash.ACTIVE, "act.org", ctime=100.0)
+        recent = self._task(dash, dash.RECENT, "rec.org", ctime=999.0)
+        rows = [
+            (dash.ROW_HEADER, "ACTIVE (1)"),
+            (dash.ROW_TASK, active),
+            (dash.ROW_HEADER, "RECENT (1)"),
+            (dash.ROW_TASK, recent),
+        ]
+        assert dash._newest_active_row_index(rows) == 1
 
 
 class TestWrapLines:

@@ -62,7 +62,9 @@ class Task:
     repo: str | None    # raw :REPO: URL at load; rewritten to the
                         # staging.org project header by load_tasks()
     path: Path
-    mtime: float
+    ctime: float  # st_ctime, used to identify just-promoted ACTIVE
+                  # rows and to sort the RECENT section by recency of
+                  # the active/ -> completed/ / dropped/ rename.
 
 
 def _ball_tag(tags) -> str:
@@ -91,7 +93,7 @@ def _load_single_task_file(path: Path, section: str) -> Task | None:
         pr_url=pr if pr else None,
         repo=props.get("REPO") or None,
         path=path,
-        mtime=path.stat().st_mtime,
+        ctime=path.stat().st_ctime,
     )
 
 
@@ -120,7 +122,7 @@ def _load_staging(
     staging: list[Task] = []
     todo_sections: dict[str, list[Task]] = {}
     repo_names: dict[str, str] = {}
-    mtime = path.stat().st_mtime
+    ctime = path.stat().st_ctime
     for project in root.children:
         props = dict(project.properties) if project.properties else {}
         repo_url = props.get("REPO") or None
@@ -141,7 +143,7 @@ def _load_staging(
                         pr_url=None,
                         repo=repo_url,
                         path=path,
-                        mtime=mtime,
+                        ctime=ctime,
                     )
                 )
             else:
@@ -159,7 +161,7 @@ def _load_staging(
                         pr_url=None,
                         repo=None,
                         path=path,
-                        mtime=mtime,
+                        ctime=ctime,
                     )
                 )
     return staging, todo_sections, repo_names
@@ -223,7 +225,7 @@ def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
                 if not t.state:
                     t.state = label
                 recent.append(t)
-    recent.sort(key=lambda t: t.mtime, reverse=True)
+    recent.sort(key=lambda t: t.ctime, reverse=True)
     recent = recent[:RECENT_LIMIT]
 
     # Rewrite each task's raw :REPO: URL to its staging.org project
@@ -297,6 +299,32 @@ def _flatten(
 
 def _selectable_indices(rows) -> list[int]:
     return [i for i, (kind, _) in enumerate(rows) if kind == ROW_TASK]
+
+
+def _newest_active_row_index(rows) -> int | None:
+    """Index of the ACTIVE ROW_TASK with the freshest `Task.ctime`, or
+    None when there are no ACTIVE rows.
+
+    Used to land the highlight on the just-promoted task after a
+    successful `P` keypress: the promote chain's final step writes a
+    new `tasks/active/<date>-<slug>.org`, so its ctime is
+    overwhelmingly the freshest among ACTIVE rows. RECENT rows are
+    intentionally ignored — a just-finalized task lives in
+    `completed/` with a very fresh ctime from the active/->completed/
+    rename, and we never want the cursor to jump there.
+    """
+    best_idx: int | None = None
+    best_ctime = float("-inf")
+    for i, (kind, payload) in enumerate(rows):
+        if kind != ROW_TASK:
+            continue
+        t: Task = payload  # type: ignore[assignment]
+        if t.section != ACTIVE:
+            continue
+        if t.ctime > best_ctime:
+            best_ctime = t.ctime
+            best_idx = i
+    return best_idx
 
 
 def _task_key(t: Task) -> tuple[str, str]:
@@ -1328,6 +1356,13 @@ def _run(stdscr) -> None:
                 # immediately even when watchers are absent.
                 if status.startswith("promoted: "):
                     rows, selected, _ = reload("reloaded")
+                    # Land the highlight on the just-promoted row —
+                    # the chain's final step is creating
+                    # tasks/active/<date>-<slug>.org, so the ACTIVE
+                    # row with the freshest ctime is the new task.
+                    new_idx = _newest_active_row_index(rows)
+                    if new_idx is not None:
+                        selected = new_idx
         elif ch == ord("f"):
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]

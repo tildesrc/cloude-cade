@@ -181,8 +181,9 @@ underlying rows stay visible at the margins. The modal shows a
 `running… (Ns)` footer while the chain is in flight and sticks around
 on completion with the full output (PR URL, task-file path, etc.) and
 an `exit <N> — Enter/q to close` footer; `Enter`, `q`, or `Esc`
-dismisses it. The new ACTIVE row shows up on the next reload; press
-`t` on it to attach to the new task's tmux session.
+dismisses it. On a successful promote the new ACTIVE row shows up on
+the next reload *and* lands selected, so `t` attaches to the new
+task's tmux session without scrolling.
 
 ```sh
 bin/cloude-dash    # /: search · p: PR · t: switch to task · c: copy slug · f: finalize · r: reload · q: quit
