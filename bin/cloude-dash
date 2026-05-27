@@ -548,7 +548,7 @@ def _draw_promote_modal(
     )
 
 
-def _run_promote_modal(stdscr, idx: int, title: str) -> int:
+def _run_promote_modal(stdscr, idx: int, title: str, dashboard_redraw) -> int:
     """Run `bin/cloude-promote --select idx` and drive the modal loop.
 
     Spawns the orchestrator with stderr merged into stdout (the chain
@@ -561,6 +561,11 @@ def _run_promote_modal(stdscr, idx: int, title: str) -> int:
     chain mutates filesystem state mid-stride (clone, branch push,
     draft PR, task-file render, staging.org edit, tmux session) and
     there's no safe cancel point.
+
+    `dashboard_redraw` is called before each modal paint so the
+    dashboard underneath the overlay stays at the current terminal
+    dimensions — that's what makes the modal margins repaint on
+    resize too.
     """
     script = Path(__file__).resolve().parent / "cloude-promote"
     proc = subprocess.Popen(
@@ -578,6 +583,17 @@ def _run_promote_modal(stdscr, idx: int, title: str) -> int:
     return_code: int | None = None
     eof = False
 
+    def render() -> None:
+        dashboard_redraw()
+        _draw_promote_modal(
+            stdscr,
+            title=title,
+            body=buf.decode("utf-8", "replace"),
+            elapsed=time.monotonic() - start,
+            running=return_code is None,
+            exit_code=return_code,
+        )
+
     try:
         while return_code is None or not eof:
             try:
@@ -592,28 +608,19 @@ def _run_promote_modal(stdscr, idx: int, title: str) -> int:
             if return_code is None:
                 return_code = proc.poll()
 
-            _draw_promote_modal(
-                stdscr,
-                title=title,
-                body=buf.decode("utf-8", "replace"),
-                elapsed=time.monotonic() - start,
-                running=return_code is None,
-                exit_code=return_code,
-            )
+            render()
 
             try:
-                stdscr.getch()  # ignored while running; just paces the tick
+                # Ignored while running; just paces the tick. KEY_RESIZE
+                # gets acknowledged so curses' cached dimensions refresh
+                # promptly — the next tick repaints at the new size.
+                ch = stdscr.getch()
             except KeyboardInterrupt:
-                pass
+                ch = -1
+            if ch == curses.KEY_RESIZE:
+                _handle_resize(stdscr)
 
-        _draw_promote_modal(
-            stdscr,
-            title=title,
-            body=buf.decode("utf-8", "replace"),
-            elapsed=time.monotonic() - start,
-            running=False,
-            exit_code=return_code,
-        )
+        render()
         # Block on key input now — no more polling needed. Use the
         # main loop's idle timeout so an inotify-triggered redraw of
         # the dashboard underneath still ticks at the normal cadence
@@ -624,6 +631,10 @@ def _run_promote_modal(stdscr, idx: int, title: str) -> int:
                 ch = stdscr.getch()
             except KeyboardInterrupt:
                 break
+            if ch == curses.KEY_RESIZE:
+                _handle_resize(stdscr)
+                render()
+                continue
             if ch in (ord("q"), 27, curses.KEY_ENTER, 10, 13):
                 break
     finally:
@@ -683,10 +694,12 @@ def _modal_read_yn(stdscr, redraw) -> bool:
     """Block on stdscr until the user picks yes or no.
 
     `redraw` is called once up-front so the prompt is visible before
-    the first getch. y/Y → True; n/N/Esc/q/Enter → False. Idle ticks
-    (the curses timeout firing without input) just cycle — the modal
-    contents aren't changing while we wait, matching the dismissal
-    loop in `_run_promote_modal`.
+    the first getch, and again on every KEY_RESIZE so the modal
+    re-flows at the new terminal dimensions. y/Y → True;
+    n/N/Esc/q/Enter → False. Idle ticks (the curses timeout firing
+    without input) just cycle — the modal contents aren't changing
+    while we wait, matching the dismissal loop in
+    `_run_promote_modal`.
     """
     stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
     redraw()
@@ -696,6 +709,10 @@ def _modal_read_yn(stdscr, redraw) -> bool:
         except KeyboardInterrupt:
             return False
         if ch == -1:
+            continue
+        if ch == curses.KEY_RESIZE:
+            _handle_resize(stdscr)
+            redraw()
             continue
         if ch in (ord("y"), ord("Y")):
             return True
@@ -708,7 +725,9 @@ def _modal_read_yn(stdscr, redraw) -> bool:
 
 def _modal_wait_dismiss(stdscr, redraw) -> None:
     """Block on stdscr until the user dismisses the modal with q / Esc /
-    Enter. `redraw` is called once before blocking. Idle ticks cycle."""
+    Enter. `redraw` is called once before blocking, and again on every
+    KEY_RESIZE so the modal re-flows at the new terminal dimensions.
+    Idle ticks cycle."""
     stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
     redraw()
     while True:
@@ -718,11 +737,15 @@ def _modal_wait_dismiss(stdscr, redraw) -> None:
             return
         if ch == -1:
             continue
+        if ch == curses.KEY_RESIZE:
+            _handle_resize(stdscr)
+            redraw()
+            continue
         if ch in (ord("q"), 27, curses.KEY_ENTER, 10, 13):
             return
 
 
-def _run_finalize_modal(stdscr, t: "Task") -> tuple[int, bool]:
+def _run_finalize_modal(stdscr, t: "Task", dashboard_redraw) -> tuple[int, bool]:
     """Drive `bin/cloude-finalize-cleanup` inside the dashboard's modal.
 
     Returns (exit_code, aborted). `aborted` is True iff the user
@@ -746,12 +769,17 @@ def _run_finalize_modal(stdscr, t: "Task") -> tuple[int, bool]:
          footer, dismiss, return (exit, True).
       5. On any other non-zero exit → mapped reason in the footer,
          dismiss, return (exit, False).
+
+    `dashboard_redraw` is called from `render` before the modal paint
+    so the dashboard underneath stays at current dimensions across
+    terminal resizes.
     """
     script = Path(__file__).resolve().parent / "cloude-finalize-cleanup"
     buf = bytearray()
     flags: list[str] = []
 
     def render(footer: str, *, body_placeholder: str = "") -> None:
+        dashboard_redraw()
         _draw_modal(
             stdscr,
             title_prefix="finalize",
@@ -821,9 +849,14 @@ def _run_finalize_modal(stdscr, t: "Task") -> tuple[int, bool]:
                 )
 
                 try:
-                    stdscr.getch()
+                    # Keys are ignored during the run; KEY_RESIZE is
+                    # acknowledged so curses' cached dimensions refresh
+                    # and the next tick paints at the new size.
+                    ch = stdscr.getch()
                 except KeyboardInterrupt:
-                    pass
+                    ch = -1
+                if ch == curses.KEY_RESIZE:
+                    _handle_resize(stdscr)
         finally:
             if proc.poll() is None:
                 proc.wait()
@@ -873,7 +906,7 @@ def _finalize_status_message(
     return f"finalize failed: {reason}"
 
 
-def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
+def _promote_staging(stdscr, t: Task, staging: list[Task], dashboard_redraw) -> str:
     """Promote the highlighted STAGING row via `bin/cloude-promote`.
 
     The staging-order in `staging` matches `cloude-list-staging`'s
@@ -886,6 +919,11 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     modal stays up after exit until Enter/q/Esc is pressed. Returns a
     status-line message describing the outcome (success or the
     mapped exit-code blurb).
+
+    `dashboard_redraw` is a no-arg closure (captured from `_run`) that
+    repaints the dashboard underneath the modal; the modal calls it
+    each tick so a SIGWINCH-driven resize re-flows both layers at
+    the new dimensions.
     """
     if t.section != STAGING:
         return "(P: only works on STAGING rows)"
@@ -898,7 +936,7 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     if not script.exists():
         return f"(P: {script} not found)"
 
-    return_code = _run_promote_modal(stdscr, idx, t.title)
+    return_code = _run_promote_modal(stdscr, idx, t.title, dashboard_redraw)
 
     if return_code == 0:
         return f"promoted: {t.title}"
@@ -906,7 +944,7 @@ def _promote_staging(stdscr, t: Task, staging: list[Task]) -> str:
     return f"promote failed: {msg}"
 
 
-def _finalize_task(stdscr, t: Task) -> str:
+def _finalize_task(stdscr, t: Task, dashboard_redraw) -> str:
     """Finalize the highlighted ACTIVE task via the modal-driven
     `bin/cloude-finalize-cleanup` wrapper.
 
@@ -916,6 +954,10 @@ def _finalize_task(stdscr, t: Task) -> str:
     handles the initial force-drop prompt, the subprocess streaming,
     and the override y/N prompts. The status-line copy on dismissal
     is computed by `_finalize_status_message`.
+
+    `dashboard_redraw` is forwarded into the modal so it can repaint
+    the dashboard underneath on every tick — keeps the margins fresh
+    across terminal resizes.
     """
     if t.section != ACTIVE:
         return "(f: only works on ACTIVE rows)"
@@ -925,7 +967,7 @@ def _finalize_task(stdscr, t: Task) -> str:
         return f"(f: {script} not found)"
 
     try:
-        exit_code, aborted = _run_finalize_modal(stdscr, t)
+        exit_code, aborted = _run_finalize_modal(stdscr, t, dashboard_redraw)
     finally:
         stdscr.timeout(_MAIN_LOOP_TIMEOUT_MS)
     return _finalize_status_message(
@@ -941,6 +983,21 @@ def _color(stdscr, tag: str) -> int:
         "user": curses.color_pair(2),
         "blocked": curses.color_pair(3),
     }.get(tag, 0)
+
+
+def _handle_resize(stdscr) -> None:
+    """Acknowledge a SIGWINCH / curses.KEY_RESIZE.
+
+    Refresh curses' cached LINES/COLS (so subsequent ``getmaxyx`` calls
+    return the new dimensions) and clear stdscr so the next draw paints
+    a clean canvas at the new size. The ``hasattr`` guard is defensive —
+    ``update_lines_cols`` has been in CPython since 3.5 and this script
+    requires 3.11.
+    """
+    if hasattr(curses, "update_lines_cols"):
+        curses.update_lines_cols()
+    stdscr.erase()
+    stdscr.refresh()
 
 
 def _draw(stdscr, rows, selected: int, status: str) -> None:
@@ -1147,6 +1204,13 @@ def _run(stdscr) -> None:
         new_rows = _flatten(groups, search_query)
         return new_rows, _follow_selection(new_rows, prev_key, selected)
 
+    def dashboard_redraw() -> None:
+        # Repaints the dashboard at the current rows/selected/status.
+        # Used by the modal flows so they can refresh the dashboard
+        # underneath their overlay (the modal's win.refresh() paints
+        # on top of stdscr afterwards, so this doesn't clobber it).
+        _draw(stdscr, rows, selected, display_status)
+
     while True:
         if search_active:
             display_status = f"/{search_query}"
@@ -1167,6 +1231,14 @@ def _run(stdscr) -> None:
             # idle tick — auto-reload if anything changed.
             if watcher.changed():
                 rows, selected, status = reload("auto-reloaded")
+            continue
+
+        if ch == curses.KEY_RESIZE:
+            # Terminal was resized; flush curses' cached dimensions and
+            # clear stdscr. The next loop iteration's _draw() paints at
+            # the new (h, w). Placed before search_active so the search
+            # prompt also repaints on resize.
+            _handle_resize(stdscr)
             continue
 
         if search_active:
@@ -1255,7 +1327,7 @@ def _run(stdscr) -> None:
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
                 staging_list: list[Task] = groups[STAGING]  # type: ignore[assignment]
-                status = _promote_staging(stdscr, t, staging_list)
+                status = _promote_staging(stdscr, t, staging_list, dashboard_redraw)
                 # The new active task will show up via inotify, but
                 # nudge a reload anyway so success is reflected
                 # immediately even when watchers are absent.
@@ -1264,7 +1336,7 @@ def _run(stdscr) -> None:
         elif ch == ord("f"):
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
-                status = _finalize_task(stdscr, t)
+                status = _finalize_task(stdscr, t, dashboard_redraw)
 
 
 def main() -> int:
