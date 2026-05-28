@@ -286,30 +286,24 @@ case "$MODE" in
     adopt)    NOTES_PRELUDE="Adopted from PR $PR_URL" ;;
 esac
 
-# Render TEMPLATE.org → $TASK_FILE via the shared
-# cloude_org.render_task_from_template helper. Booleans for adopted
-# and skip_review are passed as "1" / "" so the bool() coercion on
-# the Python side gives the right truthiness without arg munging.
+# Render TEMPLATE.org → $TASK_FILE via the bin/cloude-render-task-file
+# helper. Booleans `--adopted` and `--skip-review` are passed
+# conditionally via bash's ${VAR:+--flag} idiom.
 ADOPTED_FLAG=""; [[ "$MODE" == "adopt" ]] && ADOPTED_FLAG=1
-SKIP_REVIEW_FLAG=""; [[ -n "$SKIP_REVIEW" ]] && SKIP_REVIEW_FLAG=1
-if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
-import os, sys
-from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
-from cloude_org import render_task_from_template
-(tmpl, dest, todo, heading, task_id, repo_url, branch, worktree, pr_url,
- adopted_flag, skip_review_flag, companion, notes_prelude) = sys.argv[1:]
-out = render_task_from_template(
-    Path(tmpl).read_text(),
-    todo=todo, heading=heading, task_id=task_id, repo_url=repo_url,
-    branch=branch, worktree=worktree, pr_url=pr_url,
-    adopted=bool(adopted_flag), skip_review=bool(skip_review_flag),
-    companion=companion, notes_prelude=notes_prelude,
-)
-Path(dest).write_text(out)
-' "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
-    "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" \
-    "$ADOPTED_FLAG" "$SKIP_REVIEW_FLAG" "$COMPANION" "$NOTES_PRELUDE"; then
+if ! "$SCRIPT_DIR/cloude-render-task-file" \
+        --template "$TEMPLATE" \
+        --todo "$NEW_TODO" \
+        --heading "$NEW_HEADING" \
+        --task-id "$TASK_ID" \
+        --repo-url "$REPO_URL" \
+        --branch "$BRANCH" \
+        --worktree "$WORKTREE" \
+        --pr-url "$PR_URL" \
+        ${ADOPTED_FLAG:+--adopted} \
+        ${SKIP_REVIEW:+--skip-review} \
+        ${COMPANION:+--companion "$COMPANION"} \
+        ${NOTES_PRELUDE:+--notes-prelude "$NOTES_PRELUDE"} \
+        --out "$TASK_FILE"; then
     bail 13 "task-file render failed"
 fi
 record "Rendered task file $TASK_FILE"
@@ -318,34 +312,12 @@ record "Rendered task file $TASK_FILE"
 # Appends a fresh `*** <STAGE> (via /promote)` entry under `** Log` with
 # pre-seeded DoD checkboxes from `cloude_org.STAGE_DOD`. The stage
 # matches NEW_TODO (PLANNING for standard mode, ITERATING for ADOPT).
-# Best-effort: a seeding failure warns but does not undo the render.
-
-if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
-import os, sys
-from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
-from cloude_org import append_log_entry_skeleton, find_log_section, now_ts
-task_file, new_todo = sys.argv[1], sys.argv[2]
-path = Path(task_file)
-content = path.read_text()
-if find_log_section(content) is None:
-    sys.stderr.write(
-        "cloude-promote-setup: task file has no ** Log section; "
-        "initial log entry not seeded. Add the section to "
-        "tasks/TEMPLATE.org to enable this.\n"
-    )
-    sys.exit(0)
-try:
-    new_content = append_log_entry_skeleton(
-        content, stage=new_todo, via="/promote", prev_stage="", when=now_ts(),
-    )
-except ValueError as exc:
-    sys.stderr.write(
-        f"cloude-promote-setup: could not seed initial log entry: {exc}\n"
-    )
-    sys.exit(0)
-path.write_text(new_content)
-' "$TASK_FILE" "$NEW_TODO"; then
+# Best-effort: cloude-seed-log-entry exits 0 on a soft failure (no
+# ** Log section, ValueError from the helper) after warning to stderr,
+# so we don't need a `|| true` here — but a hard failure (task file
+# vanished) is worth surfacing.
+if ! "$SCRIPT_DIR/cloude-seed-log-entry" "$TASK_FILE" \
+        --stage "$NEW_TODO" --via /promote; then
     : # already warned via stderr; do not fail the promote
 fi
 record "Seeded initial $NEW_TODO log entry"
@@ -363,21 +335,9 @@ fi
 # it.
 STAGING_BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/cloude-staging-body.XXXXXX")"
 
-if ! CLOUDE_ROOT="$CLOUDE_ROOT" "$SCRIPT_DIR/cloude-python" -c '
-import os, sys
-from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
-from cloude_org import remove_staging_entry
-staging, target, body_out = sys.argv[1], sys.argv[2].strip(), sys.argv[3]
-path = Path(staging)
-try:
-    new_content, body = remove_staging_entry(path.read_text(), target)
-except ValueError as exc:
-    sys.exit(f"heading not found in {path}: {target!r}")
-if body_out:
-    Path(body_out).write_text(body)
-path.write_text(new_content)
-' "$STAGING" "$STAGING_HEADING" "$STAGING_BODY_FILE"; then
+if ! "$SCRIPT_DIR/cloude-remove-staging-entry" "$STAGING" \
+        --heading "$STAGING_HEADING" \
+        --body-out "$STAGING_BODY_FILE"; then
     bail 14 "removing staging entry failed"
 fi
 record "Removed staging entry"

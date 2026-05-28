@@ -375,7 +375,33 @@ dependency, and runs on plain `python3`.
   the new task file's properties drawer. Distinct non-zero exit
   codes per failure mode (10 clone, 11 worktree, 12 PR, 13 render,
   14 staging removal, 20 tmux collision, 30 arg validation) and a
-  "Succeeded so far" trail on stderr.
+  "Succeeded so far" trail on stderr. The orgmode-touching steps
+  (template rendering, log-entry seeding, staging-entry removal)
+  shell out to three named helpers — `cloude-render-task-file`,
+  `cloude-seed-log-entry`, `cloude-remove-staging-entry` — rather
+  than embedding inline `cloude-python -c '...'` heredocs.
+- **`cloude-render-task-file`** — Standalone helper that fills in
+  `tasks/TEMPLATE.org`'s placeholders. Wraps
+  `cloude_org.render_task_from_template` behind a named-flag CLI
+  (`--template`, `--todo`, `--heading`, `--task-id`, `--repo-url`,
+  `--branch`, `--worktree`, `--pr-url`, `--adopted`, `--skip-review`,
+  `--companion`, `--notes-prelude`, `--out`). `--out -` writes to
+  stdout; otherwise overwrites the named file. Exit codes: 0
+  success, 2 template-missing / render-failed, 30 CLI usage.
+- **`cloude-seed-log-entry <task-file> --stage NAME [--via TEXT]`** —
+  Appends a fresh `*** <STAGE>` entry under the task file's `** Log`
+  section. Wraps `cloude_org.append_log_entry_skeleton`. Best-effort:
+  a missing `** Log` section or an internal `ValueError` warns to
+  stderr and exits 0 (so the promote chain doesn't unwind on a soft
+  log-seed failure). Exit codes: 0 success-or-soft-noop, 2 task file
+  not found, 30 CLI usage.
+- **`cloude-remove-staging-entry <staging-file> --heading TEXT
+  [--body-out PATH]`** — Removes a level-2 idea heading + its body
+  from `tasks/staging.org` and optionally writes the removed body
+  (with its properties drawer stripped) to a separate file the
+  orchestrator pipes into the prefill prompt. Wraps
+  `cloude_org.remove_staging_entry`. Exit codes: 0 success, 2
+  file/heading not found, 30 CLI usage.
 - **`cloude-prefill-prompt <tmux-session> <prompt-file>`** —
   Best-effort background poller that pre-fills a freshly promoted
   task's Claude Code input box. Launched detached by
@@ -581,10 +607,13 @@ disk once and the hooks re-exec into its Python:
 
 `cloude-promote-setup` is a bash orchestrator whose orgmode-touching
 steps (render task file, seed initial log entry, remove staging
-entry) shell out to `cloude-python -c '...'` one-liners that call
-named helpers in `cloude_org.py`. No inline `python3 - <<'PY'`
-heredocs — the bash script is just process glue around git, `gh`,
-`tmux`, and the three Python helpers.
+entry) shell out to three named sibling helpers —
+`cloude-render-task-file`, `cloude-seed-log-entry`,
+`cloude-remove-staging-entry` — each a polyglot `sh/Python` script
+that re-execs through `bin/cloude-python` and calls one named
+helper in `cloude_org.py`. No inline `python3 - <<'PY'` heredocs and
+no `cloude-python -c '...'` one-liners — the bash script is just
+process glue around git, `gh`, `tmux`, and the three named helpers.
 
 `cloude_org.py` imports `orgparse` for its read-side parsers
 (`parse_heading`, `has_level2_section`, `remove_staging_entry`).
