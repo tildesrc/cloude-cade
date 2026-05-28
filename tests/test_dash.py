@@ -119,8 +119,7 @@ class TestLoadTasks:
     ):
         tasks_dir = tmp_path / "tasks"
         (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "completed").mkdir()
-        (tasks_dir / "dropped").mkdir()
+        (tasks_dir / "done").mkdir()
         shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
         (tasks_dir / "active" / "2026-01-01-aaa.org").write_text(
             render_task(todo="PLANNING", title="planning t", tag="user")
@@ -139,8 +138,7 @@ class TestLoadTasks:
     ):
         tasks_dir = tmp_path / "tasks"
         (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "completed").mkdir()
-        (tasks_dir / "dropped").mkdir()
+        (tasks_dir / "done").mkdir()
         shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
         (tasks_dir / "active" / "2026-01-01-t.org").write_text(
             render_task(
@@ -163,18 +161,41 @@ class TestLoadTasks:
     ):
         tasks_dir = tmp_path / "tasks"
         (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "completed").mkdir()
-        (tasks_dir / "dropped").mkdir()
+        (tasks_dir / "done").mkdir()
         shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
         # Drop RECENT_LIMIT + 5 completed files in.
         n = dash.RECENT_LIMIT + 5
         for i in range(n):
-            (tasks_dir / "completed" / f"2026-01-{i + 1:02d}-task.org").write_text(
+            (tasks_dir / "done" / f"2026-01-{i + 1:02d}-task.org").write_text(
                 render_task(todo="COMPLETE", title=f"task {i}", tag="user")
             )
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
         groups = dash.load_tasks()
         assert len(groups[dash.RECENT]) == dash.RECENT_LIMIT
+
+    def test_recent_state_drawn_from_heading_keyword(
+        self, dash, tmp_path, fixtures_dir, monkeypatch
+    ):
+        # Now that completed/ and dropped/ are merged into done/, the
+        # RECENT loader can no longer infer state from the directory
+        # name. Pin that the per-task state comes from the heading TODO
+        # keyword by dropping one COMPLETE and one DROPPED file into
+        # done/ and checking the loaded states.
+        tasks_dir = tmp_path / "tasks"
+        (tasks_dir / "active").mkdir(parents=True)
+        (tasks_dir / "done").mkdir()
+        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
+        (tasks_dir / "done" / "2026-01-01-merged.org").write_text(
+            render_task(todo="COMPLETE", title="merged t", tag="user")
+        )
+        (tasks_dir / "done" / "2026-01-02-abandoned.org").write_text(
+            render_task(todo="DROPPED", title="abandoned t", tag="user")
+        )
+        monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        groups = dash.load_tasks()
+        recent = groups[dash.RECENT]
+        states = sorted(t.state for t in recent)
+        assert states == ["COMPLETE", "DROPPED"]
 
 
 class TestStagingOrderMatchesListing:
@@ -218,11 +239,11 @@ class TestStagingOrderMatchesListing:
 
 class TestTaskKey:
     def test_stable_identity_across_directory_moves(self, dash, tmp_path):
-        # A task file is moved active/ -> completed/ as part of /finalize;
+        # A task file is moved active/ -> done/ as part of /finalize;
         # the filename is preserved. _task_key should match before and
         # after on (filename, title).
         before = tmp_path / "active" / "2026-01-01-foo.org"
-        after = tmp_path / "completed" / "2026-01-01-foo.org"
+        after = tmp_path / "done" / "2026-01-01-foo.org"
         before.parent.mkdir(parents=True)
         after.parent.mkdir(parents=True)
         for p in (before, after):
@@ -276,8 +297,8 @@ class TestNewestActiveRowIndex:
         assert dash._newest_active_row_index(rows) is None
 
     def test_ignores_recent_rows_with_fresher_ctime(self, dash):
-        # A just-finalized task lives in completed/ with a very fresh
-        # ctime from the active/->completed/ rename. The helper must
+        # A just-finalized task lives in done/ with a very fresh
+        # ctime from the active/->done/ rename. The helper must
         # not jump the cursor onto it.
         active = self._task(dash, dash.ACTIVE, "act.org", ctime=100.0)
         recent = self._task(dash, dash.RECENT, "rec.org", ctime=999.0)

@@ -32,8 +32,9 @@ All task tracking lives under `tasks/`:
   active file the same way and tells `/advance` to skip the `REVIEW`
   stage (see Workflow states).
 - `tasks/active/YYYY-MM-DD-<slug>.org` — one file per in-flight task.
-- `tasks/completed/YYYY-MM-DD-<slug>.org` — one file per merged task.
-- `tasks/dropped/YYYY-MM-DD-<slug>.org` — one file per abandoned task.
+- `tasks/done/YYYY-MM-DD-<slug>.org` — one file per finalized task.
+  Both COMPLETE and DROPPED files live here; the heading's TODO
+  keyword distinguishes them.
 - `tasks/TEMPLATE.org` — starting scaffold for new active tasks; copy
   it, don't edit it in place.
 
@@ -175,7 +176,7 @@ in-container agent.
 **Definition of done**
 - The task file has TODO state `COMPLETE` and tag `:user:`.
 
-The host-side `/finalize` then moves the file to `tasks/completed/`,
+The host-side `/finalize` then moves the file to `tasks/done/`,
 kills the tmux session, removes the worktree, and deletes the local
 branch.
 
@@ -192,7 +193,7 @@ happen from the host via `/finalize`.
 - The task file has TODO state `DROPPED` and tag `:user:`.
 
 The host-side `/finalize` then closes the PR, moves the file to
-`tasks/dropped/`, kills the tmux session, and removes the worktree.
+`tasks/done/`, kills the tmux session, and removes the worktree.
 The local branch is preserved on DROPPED in case you want to
 revisit.
 
@@ -350,8 +351,8 @@ in mind:
   own file to avoid conflicts. `$CLOUDE_TASK_FILE` is yours; treat
   the rest of `tasks/active/` as read-only by convention.
 - The worktree is the cwd and writable. The rest of the cloude repo
-  (staging.org, completed/, dropped/, README, scripts) is
-  read-only — treat the worktree as your sandbox.
+  (staging.org, done/, README, scripts) is read-only — treat the
+  worktree as your sandbox.
 - git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
   mounted read-only). Use them as you would on the host.
 
@@ -360,11 +361,9 @@ in mind:
 - `tasks/staging.org` entry → `tasks/active/YYYY-MM-DD-<slug>.org`:
   when the user promotes a captured idea to active work. Carry the
   project's `:REPO:` property into the new file's properties drawer.
-- `tasks/active/<file>.org` → `tasks/completed/<file>.org`: when the
-  task reaches `COMPLETE` (PR merged). This file move is part of the
-  COMPLETE stage's responsibility — perform it as the agent finishes
-  merging.
-- `tasks/active/<file>.org` → `tasks/dropped/<file>.org`: when the
-  task reaches `DROPPED` (abandoned).
+- `tasks/active/<file>.org` → `tasks/done/<file>.org`: when the task
+  reaches a terminal state (`COMPLETE` or `DROPPED`). The heading's
+  TODO keyword distinguishes the two outcomes; both share a single
+  destination directory.
 
-Keep the filename unchanged in both moves; only the directory changes.
+Keep the filename unchanged in the move; only the directory changes.
