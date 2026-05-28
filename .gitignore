@@ -37,5 +37,8 @@ __pycache__/
 /tasks/dropped/*.org
 
 # Project-specific pre-launch hooks — each user adds their own.
+# Exception: repo-hooks/cloude-cade ships with the repo so cloude-self
+# development worktrees get the host SessionStart filter automatically.
 /repo-hooks/*
 !/repo-hooks/.gitkeep
+!/repo-hooks/cloude-cade

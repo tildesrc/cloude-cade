@@ -312,7 +312,11 @@ dependency, and runs on plain `python3`.
   call `/suggest-slugs-watch` early in the session — the auto-arm
   step for the staging-slug watcher. Always exits 0; never blocks
   session start. Honors `CLOUDE_NO_SLUG_WATCH=1` by emitting no
-  additionalContext.
+  additionalContext. Cloude-self-development containers don't see
+  this hook fire even though the worktree carries a copy of
+  `.claude/settings.json` — `repo-hooks/cloude-cade` strips the
+  `SessionStart` entry from the worktree's copy before container
+  start.
 - **`cloude-list-active`** — Print active tasks under
   `tasks/active/`, numbered, sorted by stage priority (matching the
   dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
@@ -514,9 +518,22 @@ bullets, and the `** Log` entry helpers (`iter_log_entries`,
 
 A separate `.claude/settings.json` at the cloude repo root configures
 hooks for *host* claude sessions (the ones running in the cloude
-repo, not inside a per-task container). These do not affect the
-in-container settings file above; they're loaded independently by
-Claude Code based on the cwd.
+repo, not inside a per-task container). Claude Code loads these
+based on the cwd of the host claude session — that's `cloude/`, not
+a worktree, so the host session reads this file directly.
+
+In-container claudes don't share an inode with this file, but
+Claude Code's project-settings discovery still finds an *equivalent*
+copy via the worktree's `.git`: for cloude-self-development
+worktrees (`cloude/worktrees/cloude-cade/<slug>/`), the worktree is
+itself a cloude clone and ships its own `.claude/settings.json`.
+Without intervention, the in-container claude would pick up the host
+SessionStart hook and the staging-slug watcher reminder would leak
+into the container. The `repo-hooks/cloude-cade` pre-launch hook
+(see the *Per-repo pre-launch hooks* section in `README.md`)
+neutralizes this by stripping `hooks.SessionStart` from the
+worktree's copy before container start — the host's settings file
+is untouched.
 
 - **`SessionStart` → `bin/cloude-on-host-session-start`.** Fires when
   a host claude session opens against the cloude repo. Emits JSON
@@ -525,7 +542,10 @@ Claude Code based on the cwd.
   staging-slug watcher (`bin/cloude-watch-staging-slugs`) via a
   persistent `Monitor`. Idempotent across concurrent sessions thanks
   to the watcher's `flock -n`. `CLOUDE_NO_SLUG_WATCH=1` makes this
-  emit nothing.
+  emit nothing. For cloude-self-development containers, the
+  `repo-hooks/cloude-cade` pre-launch hook strips the SessionStart
+  entry from the worktree's `.claude/settings.json` so this hook
+  fires on the host only.
 
 ### Why hot-path hooks don't use `uv run`
 
