@@ -627,9 +627,14 @@ The container:
   because multiple in-flight tasks can't share one docker data dir
   (dockerd holds an exclusive lock). The volume persists across
   restarts of the same task to cache pulled images.
-- Persists Claude credentials/history in a named volume
-  (`cloude-claude-creds`), so login is required only once per
-  workstation.
+- Persists Claude credentials and the rest of `~/.claude`
+  (`plugins/`, `projects/`, history, etc.) in a per-repo named volume,
+  `cloude-claude-creds-<repo>` (derived from the worktree's parent
+  dir name; `bin/cloude-run` sanitizes it against Docker's volume-name
+  rule). Each repo's state is isolated — `installed_plugins.json` and
+  marketplaces in one repo can't bleed into another. Login is
+  required once per repo via `make login REPO=<repo>`; subsequent
+  tasks for that repo reuse the volume.
 - Inherits git, gh, and docker-registry auth read-only from the host's
   `~/.gitconfig`, `~/.config/gh`, and `~/.docker/config.json` (the
   docker config mount is optional — skipped if absent). Mounting

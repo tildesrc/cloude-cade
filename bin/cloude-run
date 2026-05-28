@@ -68,6 +68,15 @@ SOURCE_CLONE="$CLOUDE/repos/$REPO_NAME"
 # running cloude containers would corrupt the data dir. Persists
 # across restarts of the same task to cache pulled images.
 DIND_VOLUME="cloude-dind-$SLUG"
+# Per-repo Claude credentials/state volume. Each repo gets its own
+# cloude-claude-creds-<repo> so cross-repo plugin state (installed_
+# plugins.json, marketplaces, projects/, history) can't collide, and
+# `make login REPO=<repo>` is run once per repo to authenticate into
+# it. Sanitize REPO_NAME defensively against Docker's volume-name
+# rule ([a-zA-Z0-9][a-zA-Z0-9_.-]*); repo dir names are normally
+# already safe.
+REPO_SAFE="$(printf '%s' "$REPO_NAME" | sed 's/[^a-zA-Z0-9_.-]/-/g')"
+CREDS_VOLUME="cloude-claude-creds-$REPO_SAFE"
 
 if [[ ! -d "$SOURCE_CLONE" ]]; then
     echo "ERROR: source clone not found at $SOURCE_CLONE" >&2
@@ -159,7 +168,7 @@ fi
 # resolving regardless of the host's current VPN state.
 exec docker run --rm -it --privileged --platform linux/amd64 \
     --dns 1.1.1.1 --dns 8.8.8.8 \
-    -v cloude-claude-creds:/persist \
+    -v "$CREDS_VOLUME":/persist \
     -v "$DIND_VOLUME":/var/lib/docker \
     -v "$CLOUDE":"$CLOUDE":ro \
     -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \

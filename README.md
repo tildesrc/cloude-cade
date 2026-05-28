@@ -44,9 +44,9 @@ PR. The sections below it are the full reference.
 ### One-time setup
 
 ```sh
-make sync        # install pinned Python deps into ./.venv-host/ (host helpers)
-make build       # build the container image (a few minutes the first time)
-make login       # interactive claude login — do this once per workstation
+make sync                  # install pinned Python deps into ./.venv-host/ (host helpers)
+make build                 # build the container image (a few minutes the first time)
+make login REPO=<repo>     # interactive claude login — once per repo (see below)
 ```
 
 `make sync` runs `uv sync --frozen` against the checked-in
@@ -56,10 +56,16 @@ that re-execs through it) find their interpreter there; the container
 image gets the matching venv at `/opt/cloude-venv/` baked in by
 `make build`, from the same lockfile.
 
-After `make login` exits, your Claude credentials live in the
-`cloude-claude-creds` Docker volume and persist across every task and
-restart, so you won't need to log in again. Run `make help` for the
-rest of the targets (rebuild, clean, etc.).
+`make login REPO=<repo>` authenticates `<repo>`'s own
+`cloude-claude-creds-<repo>` Docker volume — each repo gets its own
+volume for Claude credentials and `~/.claude` state, so cross-repo
+plugin state can't collide (deepwork installed for one repo doesn't
+follow into another). `<repo>` is the parent dir of the worktree
+under `worktrees/`, i.e. the value `bin/cloude-run` derives as
+`REPO_NAME`. Run it once per repo on first use; subsequent tasks
+for that repo reuse the volume. `make info` lists the per-repo
+volumes you currently have; `make help` shows the rest of the
+targets.
 
 `make test` runs the pytest suite under `tests/` (which depends on
 `sync`, so a fresh checkout just needs `make test` to land on green).
