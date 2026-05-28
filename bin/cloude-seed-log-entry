@@ -1,0 +1,93 @@
+#!/bin/sh
+""":"
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+from __future__ import annotations
+__doc__ = """Append a fresh stage log entry to a task file.
+
+Wraps `cloude_org.append_log_entry_skeleton` as a standalone CLI so
+`bin/cloude-promote-setup` can seed the initial `*** <STAGE>` entry
+without an inline Python heredoc.
+
+Best-effort: if the task file has no `** Log` section, the helper
+prints a warning to stderr and exits 0 (the caller decides whether
+the task file is salvageable). A `ValueError` raised by the underlying
+helper is likewise warned-and-zero so the orchestrator's atomic chain
+isn't unwound by a soft log-seed failure. Hard failures (file not
+found, unreadable) exit non-zero.
+
+Usage:
+    cloude-seed-log-entry <task-file> --stage NAME [--via TEXT] \\
+                          [--prev-stage NAME] [--when TS]
+
+Defaults: --via /promote, --prev-stage empty, --when now.
+
+Exit codes:
+    0   success — or best-effort no-op (missing log section, etc.)
+    2   task file not found / unreadable
+   30   CLI usage error
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import (  # noqa: E402
+    append_log_entry_skeleton,
+    find_log_section,
+    now_ts,
+)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="cloude-seed-log-entry")
+    p.add_argument("task_file")
+    p.add_argument("--stage", required=True)
+    p.add_argument("--via", default="/promote")
+    p.add_argument("--prev-stage", default="")
+    p.add_argument("--when", default="")
+    return p
+
+
+def main(argv: list[str]) -> int:
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 30 if exc.code == 2 else (exc.code or 0)
+
+    path = Path(args.task_file)
+    if not path.is_file():
+        sys.stderr.write(f"cloude-seed-log-entry: file not found: {path}\n")
+        return 2
+
+    content = path.read_text()
+    if find_log_section(content) is None:
+        sys.stderr.write(
+            "cloude-seed-log-entry: task file has no ** Log section; "
+            "initial log entry not seeded. Add the section to "
+            "tasks/TEMPLATE.org to enable this.\n"
+        )
+        return 0
+
+    try:
+        new_content = append_log_entry_skeleton(
+            content,
+            stage=args.stage,
+            via=args.via,
+            prev_stage=args.prev_stage,
+            when=args.when or now_ts(),
+        )
+    except ValueError as exc:
+        sys.stderr.write(
+            f"cloude-seed-log-entry: could not seed log entry: {exc}\n"
+        )
+        return 0
+
+    path.write_text(new_content)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

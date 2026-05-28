@@ -1,0 +1,77 @@
+#!/bin/sh
+""":"
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+from __future__ import annotations
+__doc__ = """Remove a level-2 idea sub-heading from tasks/staging.org.
+
+Wraps `cloude_org.remove_staging_entry` as a standalone CLI so
+`bin/cloude-promote-setup` can drop the just-promoted idea without
+an inline Python heredoc. Optionally writes the removed entry's body
+text (with the properties drawer stripped) to a separate file — the
+orchestrator uses that to pre-fill the new container's Claude Code
+input box.
+
+Usage:
+    cloude-remove-staging-entry <staging-file> \\
+        --heading <text> [--body-out <path>]
+
+The heading match is whitespace-stripped exact-match against the
+level-2 heading text without its tag chain (`orgparse` strips the
+tags for us). If no level-2 heading matches, the helper exits 2 and
+leaves the file untouched.
+
+Exit codes:
+    0   success
+    2   staging file not found, heading not found, or write failed
+   30   CLI usage error
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import remove_staging_entry  # noqa: E402
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="cloude-remove-staging-entry")
+    p.add_argument("staging_file")
+    p.add_argument("--heading", required=True)
+    p.add_argument("--body-out", default="")
+    return p
+
+
+def main(argv: list[str]) -> int:
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 30 if exc.code == 2 else (exc.code or 0)
+
+    staging = Path(args.staging_file)
+    if not staging.is_file():
+        sys.stderr.write(
+            f"cloude-remove-staging-entry: staging file not found: {staging}\n"
+        )
+        return 2
+
+    try:
+        new_content, body = remove_staging_entry(
+            staging.read_text(), args.heading.strip()
+        )
+    except ValueError as exc:
+        sys.stderr.write(
+            f"cloude-remove-staging-entry: heading not found in {staging}: {exc}\n"
+        )
+        return 2
+
+    if args.body_out:
+        Path(args.body_out).write_text(body)
+    staging.write_text(new_content)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

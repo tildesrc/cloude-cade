@@ -1,0 +1,106 @@
+#!/bin/sh
+""":"
+# sh/Python polyglot shebang — re-exec through bin/cloude-python so
+# this helper runs under the shared cloude venv (orgparse, etc.).
+exec "$(dirname "$(readlink -f "$0")")/cloude-python" "$0" "$@"
+" """
+from __future__ import annotations
+__doc__ = """Render tasks/TEMPLATE.org into a fresh task file.
+
+Wraps `cloude_org.render_task_from_template` as a standalone CLI so
+`bin/cloude-promote-setup` (and any other caller) can fill in the
+template's placeholders without embedding a Python heredoc.
+
+Usage:
+    cloude-render-task-file \\
+        --template <abs-path> \\
+        --todo PLANNING|ITERATING \\
+        --heading <text> \\
+        --task-id <YYYY-MM-DD-slug> \\
+        --repo-url <url> \\
+        --branch <name> \\
+        --worktree <abs-path> \\
+        [--pr-url <url>] \\
+        [--adopted] [--skip-review] \\
+        [--companion <id>] \\
+        [--notes-prelude <text>] \\
+        --out <abs-path|->
+
+`--out -` writes to stdout; any other value is taken as a file path
+to overwrite. The rendered text mirrors what the previous inline
+heredoc in `cloude-promote-setup` produced — byte-for-byte equivalent
+under the same inputs.
+
+Exit codes:
+    0   success
+    2   template file not found, or render failed
+   30   CLI usage error
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import render_task_from_template  # noqa: E402
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="cloude-render-task-file")
+    p.add_argument("--template", required=True)
+    p.add_argument("--todo", required=True)
+    p.add_argument("--heading", required=True)
+    p.add_argument("--task-id", required=True)
+    p.add_argument("--repo-url", required=True)
+    p.add_argument("--branch", required=True)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--pr-url", default="")
+    p.add_argument("--adopted", action="store_true")
+    p.add_argument("--skip-review", action="store_true")
+    p.add_argument("--companion", default="")
+    p.add_argument("--notes-prelude", default="")
+    p.add_argument("--out", required=True)
+    return p
+
+
+def main(argv: list[str]) -> int:
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits with 2 on usage errors; remap to our 30.
+        return 30 if exc.code == 2 else (exc.code or 0)
+
+    template_path = Path(args.template)
+    if not template_path.is_file():
+        sys.stderr.write(f"cloude-render-task-file: template not found: {template_path}\n")
+        return 2
+
+    try:
+        out = render_task_from_template(
+            template_path.read_text(),
+            todo=args.todo,
+            heading=args.heading,
+            task_id=args.task_id,
+            repo_url=args.repo_url,
+            branch=args.branch,
+            worktree=args.worktree,
+            pr_url=args.pr_url,
+            adopted=args.adopted,
+            skip_review=args.skip_review,
+            companion=args.companion,
+            notes_prelude=args.notes_prelude,
+        )
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"cloude-render-task-file: render failed: {exc}\n")
+        return 2
+
+    if args.out == "-":
+        sys.stdout.write(out)
+    else:
+        Path(args.out).write_text(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
