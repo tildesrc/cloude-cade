@@ -596,6 +596,13 @@ hide the change from `git status` via `git update-index
 `index` and `info/exclude`, so these changes are isolated to the one
 worktree.
 
+`repo-hooks/cloude-cade` ships with this repo (the rest of
+`repo-hooks/` is gitignored — each user adds their own). It strips
+the host `SessionStart` hook from cloude-self-development worktrees'
+`.claude/settings.json` so the staging-slug watcher reminder, which
+is host-intent only, doesn't fire inside containers built from
+cloude worktrees.
+
 ## Slash commands
 
 Project-scoped slash commands live in `.claude/commands/`. The ones

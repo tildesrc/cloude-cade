@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Pre-launch hook for cloude-cade worktrees.
+#
+# Runs on the host (with cwd = $CLOUDE_WORKTREE) before cloude-run
+# starts the container. Idempotent — safe to run every launch.
+#
+# Cloude-cade is the cloude tooling repo itself. The worktree
+# therefore carries a checked-in .claude/settings.json that
+# registers SessionStart → bin/cloude-on-host-session-start —
+# the staging-slug watcher's auto-arm prompt. That hook is
+# host-intent only: it tells the *host* claude to call
+# /suggest-slugs-watch, which arms a Monitor against the host's
+# tasks/staging.org. In-container claudes have no business
+# managing staging.
+#
+# Claude Code's project-settings discovery loads the worktree's
+# .claude/settings.json regardless of the --settings flag
+# cloude-run passes, so without this hook the in-container claude
+# picks up the SessionStart entry and the watcher reminder leaks
+# into every container session. This hook filters that single
+# entry out of the worktree-side copy.
+#
+# Why filter rather than delete: cloude's .claude/settings.json
+# may legitimately grow other entries (permissions allowlist,
+# theme, etc.) that *are* useful inside the container. Surgical
+# removal of just hooks.SessionStart lets those flow through
+# without further hook revisions.
+#
+# The host's own claude sessions read cloude/.claude/settings.json
+# directly (host cwd is the cloude root, not a worktree) and arm
+# the watcher as before — only the per-worktree copy is touched.
+#
+# Re-enable: delete this hook, then `git checkout
+# .claude/settings.json` and clear skip-worktree on it
+# (`git update-index --no-skip-worktree .claude/settings.json`).
+
+set -euo pipefail
+
+if [[ -f .claude/settings.json ]]; then
+    tmp=$(mktemp)
+    jq '
+        del(.hooks.SessionStart)
+        | if .hooks == {} then del(.hooks) else . end
+    ' .claude/settings.json > "$tmp"
+    mv "$tmp" .claude/settings.json
+    git update-index --skip-worktree .claude/settings.json
+fi
+
+echo "Host SessionStart hook stripped from worktree's .claude/settings.json."
