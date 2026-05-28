@@ -74,7 +74,7 @@ every pull request in [`.github/workflows/test.yml`](.github/workflows/test.yml)
 flowchart TD
     subgraph host["🖥️  Host side"]
         STAGING["tasks/staging.org<br/>captured ideas"]
-        CLEANUP["/sweep → /finalize<br/>move file to completed/, tear down worktree"]
+        CLEANUP["/sweep → /finalize<br/>move file to done/, tear down worktree"]
     end
 
     subgraph container["📦  Docker container — one per task, own tmux session"]
@@ -232,7 +232,7 @@ See [Dashboard](#dashboard) for the full key list.
 6. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
    auto-advances the task to `COMPLETE` once the PR lands.
 7. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
-   `/finalize` moves the file to `tasks/completed/` and tears down the
+   `/finalize` moves the file to `tasks/done/` and tears down the
    worktree, tmux session, and branch.
 
 ### Where to go next
@@ -254,17 +254,16 @@ tasks/
   staging.org            ;; lightweight captures, not yet started
   active/                ;; one file per in-flight task
     YYYY-MM-DD-<slug>.org
-  completed/             ;; one file per merged task (COMPLETE)
-    YYYY-MM-DD-<slug>.org
-  dropped/               ;; one file per abandoned task (DROPPED)
+  done/                  ;; one file per finalized task (COMPLETE or DROPPED)
     YYYY-MM-DD-<slug>.org
   TEMPLATE.org           ;; scaffold for new active tasks (copy, don't edit)
 ```
 
 - **Top-level state** is encoded by which directory a task lives in
-  (`tasks/staging.org` → `tasks/active/` → `tasks/completed/` or
-  `tasks/dropped/`). The high-level overview comes from directory
-  listings, not a global index file.
+  (`tasks/staging.org` → `tasks/active/` → `tasks/done/`). The
+  high-level overview comes from directory listings, not a global
+  index file. Within `tasks/done/`, the heading's TODO keyword
+  (`COMPLETE` vs `DROPPED`) distinguishes the two terminal outcomes.
 - **Workflow stage** is encoded by the TODO keyword inside each active
   file (see below), so org-mode's logbook captures every state transition.
 - **One file per task** means each agent edits its own file. Concurrent
@@ -492,7 +491,7 @@ renders the following sections:
   with the project name in brackets (e.g. `[Live Nation] …`). Not
   promotable.
 - **RECENT** — the 20 most-recently-touched files from
-  `tasks/completed/` and `tasks/dropped/`.
+  `tasks/done/`.
 
 ACTIVE, STAGING, and RECENT rows are labelled with the repo the task
 belongs to, shown right-aligned just left of the PR number. The label
@@ -634,12 +633,11 @@ you invoke by hand:
   current TODO state, asks which to finalize. For `COMPLETE`,
   verifies the PR is merged, kills the tmux session, removes the
   worktree and the task's DinD volume, deletes the local branch, and
-  moves the task file to `tasks/completed/`. For `DROPPED`, closes
-  the PR, kills the tmux session, removes the worktree and DinD
-  volume, preserves the local branch, and moves the file to
-  `tasks/dropped/`. Force-drop is allowed from any non-terminal
-  state; force-complete is not (COMPLETE requires the agent to have
-  verified the merge).
+  moves the task file to `tasks/done/`. For `DROPPED`, closes the
+  PR, kills the tmux session, removes the worktree and DinD volume,
+  preserves the local branch, and moves the file to `tasks/done/`.
+  Force-drop is allowed from any non-terminal state; force-complete
+  is not (COMPLETE requires the agent to have verified the merge).
 - **`/suggest-slugs-watch`** — Arm the staging-slug watcher in this
   host session. Calls the `Monitor` tool with
   `bin/cloude-watch-staging-slugs`, then sits idle until the watcher

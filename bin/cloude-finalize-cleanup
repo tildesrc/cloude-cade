@@ -11,7 +11,7 @@
 #   4. Remove the git worktree.
 #   5. Remove the DinD volume (cloude-dind-<slug>).
 #   6. (COMPLETE only) delete the local branch.
-#   7. Move the task file into tasks/{completed,dropped}/.
+#   7. Move the task file into tasks/done/.
 #   8. Print a summary block on stdout.
 #
 # Judgment-call cases bail with distinct exit codes so the calling
@@ -400,11 +400,7 @@ fi
 
 # --- Step 7: move the task file --------------------------------------------
 
-if [[ "$TODO" == "COMPLETE" ]]; then
-    DEST_DIR="$CLOUDE_ROOT/tasks/completed"
-else
-    DEST_DIR="$CLOUDE_ROOT/tasks/dropped"
-fi
+DEST_DIR="$CLOUDE_ROOT/tasks/done"
 mkdir -p "$DEST_DIR"
 DEST="$DEST_DIR/$(basename "$TASK_FILE")"
 if ! mv "$TASK_FILE" "$DEST"; then

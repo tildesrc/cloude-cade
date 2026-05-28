@@ -1,5 +1,5 @@
 ---
-description: Finalize an active task — move its org file to tasks/completed/ or tasks/dropped/, kill its tmux session, remove its worktree, and (for COMPLETE) delete the local branch
+description: Finalize an active task — move its org file to tasks/done/, kill its tmux session, remove its worktree, and (for COMPLETE) delete the local branch
 ---
 
 You are finalizing an active task — performing the file move and cleanup the in-container agent can't do because the cloude repo is mounted read-only from inside the container. The mechanical chain lives in `bin/cloude-finalize-cleanup`; this skill is a thin wrapper that picks the task and handles the judgment-call cases the script surfaces via distinct exit codes.
@@ -28,7 +28,7 @@ bin/cloude-finalize-cleanup <abs-task-file>
 
 On success (exit 0), relay the script's summary block to the user.
 
-The script verifies the PR is `MERGED` for COMPLETE, closes it for DROPPED, kills the tmux session, removes the worktree, removes the per-task DinD volume, deletes the local branch (COMPLETE only), and moves the task file to `tasks/completed/` or `tasks/dropped/`.
+The script verifies the PR is `MERGED` for COMPLETE, closes it for DROPPED, kills the tmux session, removes the worktree, removes the per-task DinD volume, deletes the local branch (COMPLETE only), and moves the task file to `tasks/done/`.
 
 ## 3. Handle judgment-call exit codes
 

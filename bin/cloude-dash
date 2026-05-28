@@ -5,11 +5,11 @@
 # ///
 # Curses dashboard for the state of all cloude tasks.
 #
-# Reads every org file under tasks/ (active, staging, completed, dropped)
-# and renders a single ranked view: active first (sorted by stage
-# priority), then staging ideas, then a tail of recently
-# completed/dropped tasks. Enter on a row with a :PR: property opens
-# the PR in the default browser.
+# Reads every org file under tasks/ (active, staging, done) and renders
+# a single ranked view: active first (sorted by stage priority), then
+# staging ideas, then a tail of recently finalized tasks (COMPLETE or
+# DROPPED). Enter on a row with a :PR: property opens the PR in the
+# default browser.
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class Task:
     path: Path
     ctime: float  # st_ctime, used to identify just-promoted ACTIVE
                   # rows and to sort the RECENT section by recency of
-                  # the active/ -> completed/ / dropped/ rename.
+                  # the active/ -> done/ rename.
 
 
 def _ball_tag(tags) -> str:
@@ -220,15 +220,11 @@ def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
     active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
 
     recent: list[Task] = []
-    for sub, label in (("completed", "COMPLETE"), ("dropped", "DROPPED")):
-        d = TASKS / sub
-        if not d.exists():
-            continue
-        for p in d.glob("*.org"):
+    done_dir = TASKS / "done"
+    if done_dir.exists():
+        for p in done_dir.glob("*.org"):
             t = _load_single_task_file(p, RECENT)
             if t:
-                if not t.state:
-                    t.state = label
                 recent.append(t)
     recent.sort(key=lambda t: t.ctime, reverse=True)
     recent = recent[:RECENT_LIMIT]
@@ -314,9 +310,9 @@ def _newest_active_row_index(rows) -> int | None:
     successful `P` keypress: the promote chain's final step writes a
     new `tasks/active/<date>-<slug>.org`, so its ctime is
     overwhelmingly the freshest among ACTIVE rows. RECENT rows are
-    intentionally ignored — a just-finalized task lives in
-    `completed/` with a very fresh ctime from the active/->completed/
-    rename, and we never want the cursor to jump there.
+    intentionally ignored — a just-finalized task lives in `done/`
+    with a very fresh ctime from the active/->done/ rename, and we
+    never want the cursor to jump there.
     """
     best_idx: int | None = None
     best_ctime = float("-inf")
@@ -336,11 +332,10 @@ def _task_key(t: Task) -> tuple[str, str]:
     """Stable identity for a task, used to keep the highlight on the
     same task across a reload that reorders rows.
 
-    The filename is preserved when a task file moves active/ ->
-    completed/ / dropped/ (only the directory changes), so it pins a
-    logical task even as its section changes. STAGING and TODO-keyword
-    rows all share the single staging.org path, so the title
-    disambiguates them."""
+    The filename is preserved when a task file moves active/ -> done/
+    (only the directory changes), so it pins a logical task even as
+    its section changes. STAGING and TODO-keyword rows all share the
+    single staging.org path, so the title disambiguates them."""
     return (t.path.name, t.title)
 
 
@@ -1110,7 +1105,7 @@ def _move_selection(rows, sel: int, delta: int) -> int:
     return selectables[idx]
 
 
-_WATCH_DIRS = (TASKS, TASKS / "active", TASKS / "completed", TASKS / "dropped")
+_WATCH_DIRS = (TASKS, TASKS / "active", TASKS / "done")
 
 
 class _Watcher:
@@ -1214,7 +1209,7 @@ def _run(stdscr) -> None:
     def reload(label: str) -> tuple[list, int, str]:
         # Remember which task is highlighted so the highlight can
         # follow it if the rebuilt rows reorder it (stage re-sort, a
-        # task inserted above it, an active/ -> completed/ move).
+        # task inserted above it, an active/ -> done/ move).
         nonlocal groups
         prev_key = None
         if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
