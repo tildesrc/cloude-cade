@@ -225,6 +225,17 @@ SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 SLUG_MAX_LEN = 80
 
 
+def derive_slug(heading: str) -> str:
+    """Reduce a heading to a filesystem-safe slug.
+
+    Lowercase, replace any non-alphanumeric run with `-`, trim
+    leading/trailing dashes. Shared by `cloude-promote` (idea slugs)
+    and `cloude-list-staging` (vault slugs when no `:SLUG:` is set on
+    the level-1 heading), so both apply the same rule.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+
+
 class SlugClobberError(ValueError):
     """Raised by `set_idea_slug` when an existing `:SLUG:` would be overwritten.
 
@@ -341,6 +352,7 @@ def render_task_from_template(
     todo: str,
     heading: str,
     task_id: str,
+    vault: str,
     repo_url: str,
     branch: str,
     worktree: str,
@@ -377,6 +389,9 @@ def render_task_from_template(
 
     text = re.sub(
         r"^(\s*:ID:\s+).*$", rf"\g<1>{task_id}", text, count=1, flags=re.M
+    )
+    text = re.sub(
+        r"^(\s*:VAULT:\s+).*$", rf"\g<1>{vault}", text, count=1, flags=re.M
     )
     text = re.sub(
         r"^(\s*:REPO:\s+).*$", rf"\g<1>{repo_url}", text, count=1, flags=re.M

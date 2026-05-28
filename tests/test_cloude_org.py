@@ -702,6 +702,7 @@ TEMPLATE_SAMPLE = """\
 * PLANNING <task title>                                               :user:
   :PROPERTIES:
   :ID:       <YYYY-MM-DD-slug>
+  :VAULT:    <vault-slug>
   :REPO:     https://github.com/<org>/<repo>
   :BRANCH:
   :WORKTREE:
@@ -720,6 +721,7 @@ class TestRenderTaskFromTemplate:
             todo="PLANNING",
             heading="Demo task",
             task_id="2026-05-20-demo",
+            vault="personal",
             repo_url="https://github.com/x/y",
             branch="cloude/demo",
             worktree="/wt/demo",
@@ -738,6 +740,7 @@ class TestRenderTaskFromTemplate:
     def test_fills_properties(self):
         out = self._render()
         assert ":ID:       2026-05-20-demo" in out
+        assert ":VAULT:    personal" in out
         assert ":REPO:     https://github.com/x/y" in out
         assert ":BRANCH:cloude/demo" in out
         assert ":WORKTREE:/wt/demo" in out

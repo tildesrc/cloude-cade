@@ -100,47 +100,70 @@ class TestLoadSingleTaskFile:
                 },
             )
         )
-        task = dash._load_single_task_file(p, dash.ACTIVE)
+        task = dash._load_single_task_file(p, dash.ACTIVE, "personal")
         assert task is not None
         assert task.state == "ITERATING"
         assert task.tag == "agent"
         assert task.pr_url == "https://github.com/example/example/pull/7"
         assert task.repo == "https://github.com/example/example"
+        assert task.vault == "personal"
 
     def test_returns_none_for_empty_file(self, dash, tmp_path):
         p = tmp_path / "empty.org"
         p.write_text("")
-        assert dash._load_single_task_file(p, dash.ACTIVE) is None
+        assert dash._load_single_task_file(p, dash.ACTIVE, "personal") is None
+
+
+def _seed_dash_layout(tmp_path: Path, fixtures_dir: Path):
+    """Create the vault-rooted dashboard layout under ``tmp_path``.
+
+    Returns (tasks_dir, vaults_dir, personal_active, personal_done).
+    `tasks/staging.org` is copied from the fixtures; `vaults/personal/`
+    is created with empty `tasks/active/` and `tasks/done/` subdirs so
+    callers can drop in task files for whichever section they're
+    testing. Callers monkeypatch `dash.TASKS` → tasks_dir and
+    `dash.VAULTS` → vaults_dir.
+    """
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
+    vaults_dir = tmp_path / "vaults"
+    personal_active = vaults_dir / "personal" / "tasks" / "active"
+    personal_done = vaults_dir / "personal" / "tasks" / "done"
+    personal_active.mkdir(parents=True)
+    personal_done.mkdir(parents=True)
+    return tasks_dir, vaults_dir, personal_active, personal_done
 
 
 class TestLoadTasks:
     def test_active_sorted_by_stage_priority_then_filename(
         self, dash, tmp_path, fixtures_dir, monkeypatch
     ):
-        tasks_dir = tmp_path / "tasks"
-        (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "done").mkdir()
-        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
-        (tasks_dir / "active" / "2026-01-01-aaa.org").write_text(
+        tasks_dir, vaults_dir, active, _ = _seed_dash_layout(
+            tmp_path, fixtures_dir
+        )
+        (active / "2026-01-01-aaa.org").write_text(
             render_task(todo="PLANNING", title="planning t", tag="user")
         )
-        (tasks_dir / "active" / "2026-01-02-bbb.org").write_text(
+        (active / "2026-01-02-bbb.org").write_text(
             render_task(todo="MERGING", title="merging t", tag="agent")
         )
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        monkeypatch.setattr(dash, "VAULTS", vaults_dir)
         groups = dash.load_tasks()
-        active = groups[dash.ACTIVE]
+        active_tasks = groups[dash.ACTIVE]
         # MERGING (priority 0) first, then PLANNING (priority 3).
-        assert [t.state for t in active] == ["MERGING", "PLANNING"]
+        assert [t.state for t in active_tasks] == ["MERGING", "PLANNING"]
+        # Each active row carries its vault slug.
+        assert {t.vault for t in active_tasks} == {"personal"}
 
     def test_repo_labels_resolved_against_staging_projects(
         self, dash, tmp_path, fixtures_dir, monkeypatch
     ):
-        tasks_dir = tmp_path / "tasks"
-        (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "done").mkdir()
-        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
-        (tasks_dir / "active" / "2026-01-01-t.org").write_text(
+        tasks_dir, vaults_dir, active, _ = _seed_dash_layout(
+            tmp_path, fixtures_dir
+        )
+        (active / "2026-01-01-t.org").write_text(
             render_task(
                 todo="ITERATING", tag="agent",
                 properties={
@@ -150,26 +173,27 @@ class TestLoadTasks:
             )
         )
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        monkeypatch.setattr(dash, "VAULTS", vaults_dir)
         groups = dash.load_tasks()
-        active = groups[dash.ACTIVE]
+        active_tasks = groups[dash.ACTIVE]
         # The active task's raw :REPO: URL got rewritten to the
         # staging-project header text.
-        assert active[0].repo == "Example project"
+        assert active_tasks[0].repo == "Example project"
 
     def test_recent_capped_at_limit(
         self, dash, tmp_path, fixtures_dir, monkeypatch
     ):
-        tasks_dir = tmp_path / "tasks"
-        (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "done").mkdir()
-        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
+        tasks_dir, vaults_dir, _, done = _seed_dash_layout(
+            tmp_path, fixtures_dir
+        )
         # Drop RECENT_LIMIT + 5 completed files in.
         n = dash.RECENT_LIMIT + 5
         for i in range(n):
-            (tasks_dir / "done" / f"2026-01-{i + 1:02d}-task.org").write_text(
+            (done / f"2026-01-{i + 1:02d}-task.org").write_text(
                 render_task(todo="COMPLETE", title=f"task {i}", tag="user")
             )
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        monkeypatch.setattr(dash, "VAULTS", vaults_dir)
         groups = dash.load_tasks()
         assert len(groups[dash.RECENT]) == dash.RECENT_LIMIT
 
@@ -181,17 +205,17 @@ class TestLoadTasks:
         # name. Pin that the per-task state comes from the heading TODO
         # keyword by dropping one COMPLETE and one DROPPED file into
         # done/ and checking the loaded states.
-        tasks_dir = tmp_path / "tasks"
-        (tasks_dir / "active").mkdir(parents=True)
-        (tasks_dir / "done").mkdir()
-        shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
-        (tasks_dir / "done" / "2026-01-01-merged.org").write_text(
+        tasks_dir, vaults_dir, _, done = _seed_dash_layout(
+            tmp_path, fixtures_dir
+        )
+        (done / "2026-01-01-merged.org").write_text(
             render_task(todo="COMPLETE", title="merged t", tag="user")
         )
-        (tasks_dir / "done" / "2026-01-02-abandoned.org").write_text(
+        (done / "2026-01-02-abandoned.org").write_text(
             render_task(todo="DROPPED", title="abandoned t", tag="user")
         )
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        monkeypatch.setattr(dash, "VAULTS", vaults_dir)
         groups = dash.load_tasks()
         recent = groups[dash.RECENT]
         states = sorted(t.state for t in recent)
@@ -215,6 +239,7 @@ class TestStagingOrderMatchesListing:
         tasks_dir.mkdir(parents=True)
         shutil.copy(fixtures_dir / "staging.org", tasks_dir / "staging.org")
         monkeypatch.setattr(dash, "TASKS", tasks_dir)
+        monkeypatch.setattr(dash, "VAULTS", tmp_path / "vaults")
         groups = dash.load_tasks()
         dash_titles = [t.title for t in groups[dash.STAGING]]
         # Now ask cloude-list-staging for each index in order and
@@ -248,8 +273,8 @@ class TestTaskKey:
         after.parent.mkdir(parents=True)
         for p in (before, after):
             p.write_text(render_task(todo="COMPLETE", title="title", tag="user"))
-        t1 = dash._load_single_task_file(before, dash.ACTIVE)
-        t2 = dash._load_single_task_file(after, dash.RECENT)
+        t1 = dash._load_single_task_file(before, dash.ACTIVE, "personal")
+        t2 = dash._load_single_task_file(after, dash.RECENT, "personal")
         assert dash._task_key(t1) == dash._task_key(t2)
 
 
@@ -270,6 +295,7 @@ class TestNewestActiveRowIndex:
             title=name,
             pr_url=None,
             repo=None,
+            vault="personal",
             path=Path("/tmp") / name,
             ctime=ctime,
         )
@@ -358,8 +384,8 @@ class TestFlatten:
         p1.write_text(render_task(todo="ITERATING", title="cat task", tag="agent"))
         p2.write_text(render_task(todo="ITERATING", title="dog task", tag="agent"))
         active = [
-            dash._load_single_task_file(p1, dash.ACTIVE),
-            dash._load_single_task_file(p2, dash.ACTIVE),
+            dash._load_single_task_file(p1, dash.ACTIVE, "personal"),
+            dash._load_single_task_file(p2, dash.ACTIVE, "personal"),
         ]
         groups = {
             dash.ACTIVE: active,

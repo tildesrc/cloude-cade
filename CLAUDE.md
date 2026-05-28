@@ -22,19 +22,24 @@ part of the task, not a follow-up.
 
 The org files are the source of truth for in-flight work and its history:
 
-All task tracking lives under `tasks/`:
+Task tracking is partitioned across **vaults** (isolation boundaries
+that sit above repos — see the README's Vaults section). Active and
+done task files live under each vault; staging is shared.
 
-- `tasks/staging.org` — captures not yet started, organized under
-  top-level *project* headings. Each project carries a `:REPO:`
-  property identifying its GitHub repo; that property travels with the
-  task into the active file when it's promoted. A project may also
-  carry an optional `:SKIP_REVIEW: t` property — it travels into the
-  active file the same way and tells `/advance` to skip the `REVIEW`
-  stage (see Workflow states).
-- `tasks/active/YYYY-MM-DD-<slug>.org` — one file per in-flight task.
-- `tasks/done/YYYY-MM-DD-<slug>.org` — one file per finalized task.
-  Both COMPLETE and DROPPED files live here; the heading's TODO
-  keyword distinguishes them.
+- `tasks/staging.org` — shared captures, not yet started. Outline
+  shape: level-1 = vault, level-2 = project, level-3 = idea. Each
+  vault carries an optional `:SLUG:` property naming its directory
+  under `vaults/`; each project carries a `:REPO:` property
+  identifying its GitHub repo (and optional `:SKIP_REVIEW: t` for
+  repos that opt out of peer review). All three travel with the idea
+  into the active file when it's promoted — `:SLUG:` → vault slug,
+  `:REPO:` → `:REPO:` property, `:SKIP_REVIEW:` → `:SKIP_REVIEW:`
+  property.
+- `vaults/<vault>/tasks/active/YYYY-MM-DD-<slug>.org` — one file
+  per in-flight task.
+- `vaults/<vault>/tasks/done/YYYY-MM-DD-<slug>.org` — one file per
+  finalized task. Both COMPLETE and DROPPED files live here; the
+  heading's TODO keyword distinguishes them.
 - `tasks/TEMPLATE.org` — starting scaffold for new active tasks; copy
   it, don't edit it in place.
 
@@ -176,7 +181,7 @@ in-container agent.
 **Definition of done**
 - The task file has TODO state `COMPLETE` and tag `:user:`.
 
-The host-side `/finalize` then moves the file to `tasks/done/`,
+The host-side `/finalize` then moves the file to the vault's `tasks/done/`,
 kills the tmux session, removes the worktree, and deletes the local
 branch.
 
@@ -192,8 +197,8 @@ happen from the host via `/finalize`.
 **Definition of done**
 - The task file has TODO state `DROPPED` and tag `:user:`.
 
-The host-side `/finalize` then closes the PR, moves the file to
-`tasks/done/`, kills the tmux session, and removes the worktree.
+The host-side `/finalize` then closes the PR, moves the file to the
+vault's `tasks/done/`, kills the tmux session, and removes the worktree.
 The local branch is preserved on DROPPED in case you want to
 revisit.
 
@@ -333,37 +338,52 @@ in mind:
   unprivileged user; only `dockerd` is privileged.
 - **`$CLOUDE_TASK_FILE` is writable. Edit it directly.** Yes, the
   cloude repo as a whole is mounted read-only — *but `bin/cloude-run`
-  layers a writable bind mount on top of `tasks/active/` (the whole
-  directory)*, so any file under `tasks/active/` is writable from
-  inside. Use it: write your `** Plan` content into the task file
-  during PLANNING; flip the heading's TODO keyword and tag via
-  `/advance`, `/iterate`, `/drop`; append session notes into
-  `** Notes`. **Do not** assume "cloude is ro" and write your plan
-  into a commit message as a workaround — write the plan into the
-  task file's `** Plan` section, which is exactly what PLANNING's
-  DoD ("the plan is written into the task's org file") requires.
+  layers a writable bind mount on top of your vault's
+  `tasks/active/` directory (and re-mounts the whole vault rw on top
+  of a tmpfs overlay that hides every sibling vault)*, so any file
+  under `vaults/<your-vault>/tasks/active/` is writable from inside.
+  Use it: write your `** Plan` content into the task file during
+  PLANNING; flip the heading's TODO keyword and tag via `/advance`,
+  `/iterate`, `/drop`; append session notes into `** Notes`. **Do
+  not** assume "cloude is ro" and write your plan into a commit
+  message as a workaround — write the plan into the task file's
+  `** Plan` section, which is exactly what PLANNING's DoD ("the
+  plan is written into the task's org file") requires.
+- **You cannot see other vaults.** The container's view of
+  `vaults/` is a tmpfs into which only your vault is re-mounted.
+  Other vaults' repos, worktrees, task files, and credentials are
+  not enumerable, stat-able, or readable from inside. Your vault
+  slug is in `$CLOUDE_VAULT`.
 - **Soft rule: only edit your own task file.** The rw mount covers
-  the whole `tasks/active/` directory (because Docker single-file
-  bind mounts break when the host writes via atomic-rename — a
-  directory-level mount is the inode-stable alternative). You can
-  technically read and write the other in-flight tasks' files, but
-  **don't**. Concurrent agents rely on each one updating only its
-  own file to avoid conflicts. `$CLOUDE_TASK_FILE` is yours; treat
-  the rest of `tasks/active/` as read-only by convention.
+  the whole `vaults/<your-vault>/tasks/active/` directory (because
+  Docker single-file bind mounts break when the host writes via
+  atomic-rename — a directory-level mount is the inode-stable
+  alternative). You can technically read and write the other
+  in-flight tasks' files *within your vault*, but **don't**.
+  Concurrent agents rely on each one updating only its own file to
+  avoid conflicts. `$CLOUDE_TASK_FILE` is yours; treat the rest of
+  `vaults/<your-vault>/tasks/active/` as read-only by convention.
 - The worktree is the cwd and writable. The rest of the cloude repo
-  (staging.org, done/, README, scripts) is read-only — treat the
-  worktree as your sandbox.
-- git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
-  mounted read-only). Use them as you would on the host.
+  (`tasks/staging.org`, your vault's `done/`, README, scripts) is
+  read-only — treat the worktree as your sandbox.
+- git and `gh` auth are vault-scoped. `~/.gitconfig` and
+  `~/.config/gh` are mounted read-only from your vault's
+  `creds/{gitconfig,gh/}` directory, and `GH_TOKEN` comes from
+  `creds/env`. The host's ambient credentials are NOT forwarded —
+  if you need a different identity you're in the wrong vault.
 
 ### Moving tasks between directories
 
-- `tasks/staging.org` entry → `tasks/active/YYYY-MM-DD-<slug>.org`:
-  when the user promotes a captured idea to active work. Carry the
-  project's `:REPO:` property into the new file's properties drawer.
-- `tasks/active/<file>.org` → `tasks/done/<file>.org`: when the task
-  reaches a terminal state (`COMPLETE` or `DROPPED`). The heading's
-  TODO keyword distinguishes the two outcomes; both share a single
-  destination directory.
+- `tasks/staging.org` entry → `vaults/<vault>/tasks/active/YYYY-MM-DD-<slug>.org`:
+  when the user promotes a captured idea to active work. The vault
+  slug comes from the staging idea's level-1 ancestor (`:SLUG:` or
+  derived from the heading). Carry the project's `:REPO:` and
+  `:SKIP_REVIEW:` properties into the new file's properties drawer,
+  and add `:VAULT: <slug>` so `cloude-run` can cross-check the path.
+- `vaults/<vault>/tasks/active/<file>.org` → `vaults/<vault>/tasks/done/<file>.org`:
+  when the task reaches a terminal state (`COMPLETE` or `DROPPED`).
+  The heading's TODO keyword distinguishes the two outcomes; both
+  share a single destination directory within the vault. A task
+  never crosses vaults.
 
 Keep the filename unchanged in the move; only the directory changes.

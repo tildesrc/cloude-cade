@@ -1,8 +1,8 @@
 ---
-description: Scan tasks/active/ for tasks in terminal states (COMPLETE or DROPPED) and offer to /finalize each after explicit user approval
+description: Scan every vault's tasks/active/ for tasks in terminal states (COMPLETE or DROPPED) and offer to /finalize each after explicit user approval
 ---
 
-You are sweeping the active task pool for tasks that have reached a terminal TODO state (`COMPLETE` or `DROPPED`) but haven't been moved out of `tasks/active/` yet — i.e., the in-container agent has set the keyword but the host hasn't run `/finalize`. This skill is designed to be cheap when there's nothing to do (safe to put on a `/loop`) and explicit about asking before any destructive action.
+You are sweeping the active task pool (across every vault) for tasks that have reached a terminal TODO state (`COMPLETE` or `DROPPED`) but haven't been moved out of `vaults/<vault>/tasks/active/` yet — i.e., the in-container agent has set the keyword but the host hasn't run `/finalize`. This skill is designed to be cheap when there's nothing to do (safe to put on a `/loop`) and explicit about asking before any destructive action.
 
 The cloude repo root (current working directory when this command was invoked) is the anchor for relative paths below.
 
@@ -19,8 +19,8 @@ If the output is exactly `No tasks awaiting finalize.`, print that one line and 
 Otherwise, each numbered line is a candidate to surface to the user. The format already matches what `/finalize` would show:
 
 ```
-1) [COMPLETE :user:] heading text  (tasks/active/<filename>.org)
-2) [DROPPED :user:] another task   (tasks/active/<other>.org)
+1) [personal] [COMPLETE :user:] heading text  (vaults/personal/tasks/active/<filename>.org)
+2) [work]     [DROPPED :user:] another task   (vaults/work/tasks/active/<other>.org)
 ```
 
 Present those lines verbatim to the user as the candidate list.

@@ -18,13 +18,13 @@ Output looks like:
 
 ```
 PROMOTABLE
-1) [project-name] idea heading text  [ADOPT]
-2) [project-name] another idea
+1) [<vault-slug>/<project-name>] idea heading text  [ADOPT]
+2) [<vault-slug>/<project-name>] another idea
 ...
 TODO_PROJECTS  <count>
 ```
 
-Present the numbered `PROMOTABLE` lines to the user. If `TODO_PROJECTS` is non-zero, print one short note above the listing: `(<count> TODO-project ideas omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask which one to promote.
+The `[<vault-slug>/<project-name>]` prefix shows which vault and project each idea belongs to. Present the numbered `PROMOTABLE` lines to the user verbatim. If `TODO_PROJECTS` is non-zero, print one short note above the listing: `(<count> TODO-project ideas omitted — those aren't promotable; see them in bin/cloude-dash.)` Ask which one to promote.
 
 If the user names a TODO-project idea by some out-of-band shortcut, refuse: "that project has no `:REPO:` — its ideas are personal TODOs, not promotable. Add a `:REPO:` to the project heading first if you want to promote them."
 

@@ -194,7 +194,9 @@ def render_task(
 ) -> str:
     """Render a task .org file body as a string.
 
-    ``properties`` is merged on top of a small default set (ID + REPO).
+    ``properties`` is merged on top of a small default set (ID + VAULT
+    + REPO). The default ``VAULT`` is ``personal`` to match the
+    ``task_file_factory`` directory layout.
     ``sections`` is dropped between the heading/properties block and the
     ``** Log`` heading verbatim — pass extra ``** Goal``, ``** Plan``
     etc. content here.
@@ -208,7 +210,11 @@ def render_task(
         missing-log schema-error case).
     """
 
-    props = {"ID": "fixture-task", "REPO": "https://github.com/example/example"}
+    props = {
+        "ID": "fixture-task",
+        "VAULT": "personal",
+        "REPO": "https://github.com/example/example",
+    }
     if properties:
         props.update(properties)
     props_block = "  :PROPERTIES:\n" + "".join(
@@ -249,21 +255,26 @@ def render_task(
 def task_file_factory(tmp_path: Path):
     """Return a callable that writes a fixture task file under ``tmp_path``.
 
-    The file lives at ``tmp_path/active/<name>.org`` so cloude-task-info's
-    ``cloude_root = path.parent.parent.parent`` heuristic resolves to
-    ``tmp_path`` and the rest of the active/staging/completed siblings
-    can be set up alongside it.
+    The file lives at ``tmp_path/vaults/<vault>/tasks/active/<name>.org``
+    so cloude-task-info's ``cloude_root = path.parents[4]`` heuristic
+    resolves to ``tmp_path``. Default vault is ``personal`` to match
+    ``render_task``'s default ``:VAULT:`` property. Pass ``vault=...``
+    to override; the rendered file's ``:VAULT:`` is updated to match.
     """
 
-    active_dir = tmp_path / "tasks" / "active"
-    active_dir.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
 
     def _make(
         name: str = "2026-01-01-fixture-task.org",
+        *,
+        vault: str = "personal",
         **kwargs,
     ) -> Path:
-        content = render_task(**kwargs)
+        properties = dict(kwargs.pop("properties", None) or {})
+        properties.setdefault("VAULT", vault)
+        content = render_task(properties=properties, **kwargs)
+        active_dir = tmp_path / "vaults" / vault / "tasks" / "active"
+        active_dir.mkdir(parents=True, exist_ok=True)
         path = active_dir / name
         path.write_text(content)
         created.append(path)
@@ -277,6 +288,46 @@ def task_file_factory(tmp_path: Path):
             dod_marker_path(path).unlink(missing_ok=True)
         except OSError:
             pass
+
+
+@pytest.fixture
+def vault_creds_factory(tmp_path: Path):
+    """Return a callable that materializes ``vaults/<vault>/creds/`` under
+    ``tmp_path``.
+
+    Used by ``bin/cloude-run`` tests. Creates an empty ``gh/`` directory
+    (the mount source needs to exist; contents are opaque to cloude-run
+    itself), an empty ``gitconfig`` file, and an ``env`` file containing
+    ``GH_TOKEN=ghp_fixture`` so the assembled docker argv carries a
+    vault-scoped token.
+
+    Pass ``files={"gitconfig": "...", "env": "GH_TOKEN=xyz"}`` to
+    override any individual entry, or ``omit=("env",)`` to leave one
+    out (for the missing-creds fail-fast tests).
+    """
+
+    def _make(
+        vault: str = "personal",
+        *,
+        files: dict[str, str] | None = None,
+        omit: tuple[str, ...] = (),
+    ) -> Path:
+        creds = tmp_path / "vaults" / vault / "creds"
+        creds.mkdir(parents=True, exist_ok=True)
+        defaults = {
+            "gitconfig": "[user]\n\tname = Fixture User\n",
+            "env": "GH_TOKEN=ghp_fixture\n",
+        }
+        merged = {**defaults, **(files or {})}
+        if "gh" not in omit:
+            (creds / "gh").mkdir(exist_ok=True)
+        for name, content in merged.items():
+            if name in omit:
+                continue
+            (creds / name).write_text(content)
+        return creds
+
+    return _make
 
 
 @pytest.fixture

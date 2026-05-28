@@ -3,6 +3,18 @@
 #
 # Designed to be called from /promote (which already has these paths in
 # hand) but also runnable by hand from any shell.
+#
+# Vault isolation: this script derives the task's vault from the task
+# file path, validates the vault has populated credentials at
+# vaults/<vault>/creds/, and arranges the container's mounts so:
+#   - the cloude repo is read-only, but the /vaults/ subdirectory is
+#     replaced with a tmpfs overlay so sibling vaults are invisible;
+#   - only the resolved vault's directory is re-mounted (rw) on top of
+#     the tmpfs, so the in-container agent sees exactly its own vault
+#     and nothing about any other;
+#   - credentials (gh config dir, gitconfig, GH_TOKEN, claude-creds
+#     Docker volume) are sourced from that vault, NOT from the host's
+#     ambient $HOME / $GH_TOKEN.
 
 set -euo pipefail
 
@@ -12,9 +24,17 @@ Usage: $(basename "$0") <worktree-abs-path> <task-file-abs-path>
 
 Both arguments are absolute paths under the cloude repo root:
   <worktree-abs-path>   Git worktree (cwd inside the container).
-                        Must live under <cloude-root>/worktrees/<repo>/<slug>.
+                        Must live under
+                        <cloude-root>/vaults/<vault>/worktrees/<repo>/<slug>.
   <task-file-abs-path>  Active task .org file.
-                        Must live under <cloude-root>/tasks/active/.
+                        Must live under
+                        <cloude-root>/vaults/<vault>/tasks/active/.
+
+Environment:
+  CLOUDE_RUN_DRY_RUN=1  Print the assembled \`docker run\` argv (one
+                        arg per line, prefixed \`DOCKER_RUN_ARGV\`) and
+                        exit 0 instead of executing. Used by the test
+                        suite.
 EOF
 }
 
@@ -26,9 +46,12 @@ fi
 WORKTREE="$1"
 TASK_FILE="$2"
 
-# Resolve cloude root from script location: bin/cloude-run -> cloude/.
+# Resolve cloude root: env-var override wins (used by the test suite to
+# point at a temp directory); otherwise derive from this script's
+# location (bin/cloude-run -> cloude/). Matches the same pattern as
+# cloude-list-staging / cloude-list-active / cloude-task-info.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLOUDE="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLOUDE="${CLOUDE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 if [[ ! -d "$WORKTREE" ]]; then
     echo "ERROR: worktree does not exist: $WORKTREE" >&2
@@ -43,37 +66,119 @@ fi
 WORKTREE="$(cd "$WORKTREE" && pwd)"
 TASK_FILE="$(cd "$(dirname "$TASK_FILE")" && pwd)/$(basename "$TASK_FILE")"
 
-case "$WORKTREE" in
-    "$CLOUDE/worktrees/"*) ;;
-    *)
-        echo "ERROR: worktree must live under $CLOUDE/worktrees/: $WORKTREE" >&2
-        exit 1
-        ;;
-esac
-
+# Derive the vault from the task file path: it must live under
+# <cloude>/vaults/<vault>/tasks/active/. Anything else is a malformed
+# invocation (eg. a legacy <cloude>/tasks/active/ path from the
+# pre-vault layout — those files need to be migrated to a vault).
 case "$TASK_FILE" in
-    "$CLOUDE/tasks/active/"*) ;;
+    "$CLOUDE/vaults/"*"/tasks/active/"*) ;;
     *)
-        echo "ERROR: task file must live under $CLOUDE/tasks/active/: $TASK_FILE" >&2
+        echo "ERROR: task file must live under <cloude>/vaults/<vault>/tasks/active/: $TASK_FILE" >&2
         exit 1
         ;;
 esac
 
-# Derive repo info: WORKTREE = $CLOUDE/worktrees/<repo>/<slug>
+# Strip prefix and suffix to extract the vault slug.
+_path_after_vaults="${TASK_FILE#"$CLOUDE/vaults/"}"
+VAULT="${_path_after_vaults%%/tasks/active/*}"
+if [[ -z "$VAULT" || "$VAULT" == "$_path_after_vaults" ]]; then
+    echo "ERROR: could not extract vault slug from task file path: $TASK_FILE" >&2
+    exit 1
+fi
+
+case "$WORKTREE" in
+    "$CLOUDE/vaults/$VAULT/worktrees/"*) ;;
+    *)
+        echo "ERROR: worktree must live under $CLOUDE/vaults/$VAULT/worktrees/: $WORKTREE" >&2
+        exit 1
+        ;;
+esac
+
+# Cross-check the task file's :VAULT: property against the path-derived
+# vault. A mismatch means the task file was moved into the wrong vault
+# directory; bail rather than launching with confused mounts.
+# sed instead of GNU-awk's match(...) array form (which isn't POSIX);
+# this works under busybox/mawk too. The first match wins — the value
+# only appears once in the heading's properties drawer.
+TASK_VAULT_PROP=$(sed -nE 's/^[[:space:]]*:VAULT:[[:space:]]+([^[:space:]]+).*/\1/p' "$TASK_FILE" | head -n1)
+if [[ -n "$TASK_VAULT_PROP" && "$TASK_VAULT_PROP" != "$VAULT" ]]; then
+    echo "ERROR: task file's :VAULT: property ($TASK_VAULT_PROP) does not match path-derived vault ($VAULT): $TASK_FILE" >&2
+    exit 1
+fi
+
+# Derive repo info: WORKTREE = $CLOUDE/vaults/<vault>/worktrees/<repo>/<slug>
 REPO_NAME="$(basename "$(dirname "$WORKTREE")")"
 SLUG="$(basename "$WORKTREE")"
-SOURCE_CLONE="$CLOUDE/repos/$REPO_NAME"
+SOURCE_CLONE="$CLOUDE/vaults/$VAULT/repos/$REPO_NAME"
 # Per-task volume for the in-container dockerd's /var/lib/docker.
 # Must be its own volume (one dockerd per data dir); sharing across
 # running cloude containers would corrupt the data dir. Persists
 # across restarts of the same task to cache pulled images.
 DIND_VOLUME="cloude-dind-$SLUG"
+# Per-vault Claude credentials volume. Each vault gets its own ~/.claude
+# state — separate `claude login` per vault. The volume is created on
+# demand by Docker when first referenced.
+CLAUDE_CREDS_VOLUME="cloude-claude-creds-$VAULT"
 
 if [[ ! -d "$SOURCE_CLONE" ]]; then
     echo "ERROR: source clone not found at $SOURCE_CLONE" >&2
     echo "       (run /promote to create it, or git clone manually)" >&2
     exit 1
 fi
+
+# --- Vault credentials --------------------------------------------------
+#
+# vaults/<vault>/creds/ holds everything the container needs to
+# authenticate as the vault's identity:
+#   gh/         — mounted as ~/.config/gh (gh CLI auth)
+#   gitconfig   — mounted as ~/.gitconfig
+#   env         — KEY=val lines sourced into the container's environment
+#                 (at minimum GH_TOKEN; arbitrary additional vars allowed)
+# Missing any of these is a hard error: launching the container with
+# the host's ambient credentials would violate the isolation guarantee.
+CREDS_DIR="$CLOUDE/vaults/$VAULT/creds"
+CREDS_GH="$CREDS_DIR/gh"
+CREDS_GITCONFIG="$CREDS_DIR/gitconfig"
+CREDS_ENV="$CREDS_DIR/env"
+
+_creds_missing=()
+[[ -d "$CREDS_GH" ]]        || _creds_missing+=("gh/")
+[[ -f "$CREDS_GITCONFIG" ]] || _creds_missing+=("gitconfig")
+[[ -f "$CREDS_ENV" ]]       || _creds_missing+=("env")
+
+if ((${#_creds_missing[@]})); then
+    cat >&2 <<EOF
+ERROR: vault '$VAULT' is missing credentials at:
+       $CREDS_DIR
+       Missing entries: ${_creds_missing[*]}
+
+Populate it with:
+  mkdir -p $CREDS_DIR/gh
+  cp -r ~/.config/gh/. $CREDS_DIR/gh/
+  cp ~/.gitconfig $CREDS_DIR/gitconfig
+  echo GH_TOKEN=ghp_... > $CREDS_DIR/env
+EOF
+    exit 1
+fi
+
+# Source vault-scoped env vars (GH_TOKEN, etc.) for the container.
+# Format: KEY=value, one per line; comments (# ...) and blank lines
+# allowed; values may be quoted (shell-style). Anything not matching
+# KEY=value is ignored with a stderr warning so an accidental free-form
+# note doesn't silently break the launch.
+VAULT_ENV_ARGS=()
+while IFS= read -r _line || [[ -n "$_line" ]]; do
+    # Trim trailing CR for CRLF files; strip leading whitespace.
+    _line="${_line%$'\r'}"
+    _line="${_line#"${_line%%[![:space:]]*}"}"
+    [[ -z "$_line" || "$_line" == \#* ]] && continue
+    if [[ "$_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+        # Take literal KEY=VALUE; let docker do the env interpolation.
+        VAULT_ENV_ARGS+=(-e "$_line")
+    else
+        echo "WARNING: $CREDS_ENV: skipping unparseable line: $_line" >&2
+    fi
+done <"$CREDS_ENV"
 
 # Per-repo pre-launch hook. If $CLOUDE/repo-hooks/<repo-name> exists and
 # is executable, run it with cwd = worktree before the container starts.
@@ -89,6 +194,7 @@ if [[ -x "$HOOK" ]]; then
         CLOUDE_WORKTREE="$WORKTREE" \
         CLOUDE_TASK_FILE="$TASK_FILE" \
         CLOUDE_REPO_NAME="$REPO_NAME" \
+        CLOUDE_VAULT="$VAULT" \
             "$HOOK"
     ) || {
         echo "ERROR: pre-launch hook failed; not starting container." >&2
@@ -112,14 +218,6 @@ if [[ -f "$HOME/.docker/config.json" ]]; then
     DOCKER_CFG_MOUNT=(-v "$_cfg_tmp":/home/cloude/.docker/config.json:ro)
 fi
 
-# Forward GH_TOKEN so the in-container 'gh' (and the gh credential
-# helper baked into /etc/gitconfig) can authenticate against GitHub.
-# Skipped silently if the host doesn't have it set.
-GH_TOKEN_ENV=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-    GH_TOKEN_ENV=(-e "GH_TOKEN=$GH_TOKEN")
-fi
-
 # Forward the host's IANA timezone so in-container timestamps (the
 # task file's `** Log` entries, `date`, etc.) match what host-side
 # /promote / /finalize stamp. The base image defaults to UTC, which
@@ -140,39 +238,72 @@ elif [[ -L /etc/localtime ]]; then
     fi
 fi
 
-# tasks/active/ is mounted rw at the DIRECTORY level (not the specific
-# file). Reason: Docker single-file bind mounts pin to the source
-# inode, so any host-side edit that writes via atomic-rename (e.g.,
-# the Claude Code Edit tool does write-to-tmp then `rename()`) replaces
-# the inode and silently breaks the bind. With a dir-level mount, the
-# dir's inode stays stable across child-file renames, so host edits
-# continue to be visible inside and the task file stays writable.
-# Trade-off: the agent has rw on ALL active tasks. The "edit only your
-# own task file" rule becomes a soft (CLAUDE.md-enforced) rule rather
-# than a physical (mount-enforced) one. $CLOUDE_TASK_FILE tells the
-# agent which one is theirs.
-# Pin DNS to public resolvers. Docker normally copies the host's
-# /etc/resolv.conf at container-create time, but that file picks up
-# whatever nameserver the host had when the container started -
-# including transient VPN nameservers that go unreachable once the
-# VPN drops. Hard-coding 1.1.1.1 / 8.8.8.8 here keeps containers
-# resolving regardless of the host's current VPN state.
-exec docker run --rm -it --privileged --platform linux/amd64 \
-    --dns 1.1.1.1 --dns 8.8.8.8 \
-    -v cloude-claude-creds:/persist \
-    -v "$DIND_VOLUME":/var/lib/docker \
-    -v "$CLOUDE":"$CLOUDE":ro \
-    -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw \
-    -v "$WORKTREE":"$WORKTREE":rw \
-    -v "$CLOUDE/tasks/active":"$CLOUDE/tasks/active":rw \
-    -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
-    -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
-    "${DOCKER_CFG_MOUNT[@]}" \
-    "${GH_TOKEN_ENV[@]}" \
-    "${TZ_ENV[@]}" \
-    -e "CLOUDE_TASK_FILE=$TASK_FILE" \
-    -e "CLOUDE_ROOT=$CLOUDE" \
-    -e "DOCKER_HOST=unix:///var/run/docker.sock" \
-    -w "$WORKTREE" \
-    cloude \
+# --- Mount layering for vault isolation ---------------------------------
+#
+# The container's view of $CLOUDE is built up in layers, each
+# overlaying the previous:
+#
+#   1. $CLOUDE:$CLOUDE:ro
+#         The whole cloude repo, read-only. Includes tasks/staging.org
+#         (shared across vaults) and the tracked code (bin/, docker/,
+#         README, etc.).
+#
+#   2. --tmpfs $CLOUDE/vaults
+#         An empty tmpfs replaces the read-only view of the vaults/
+#         subdirectory. Every sibling vault becomes invisible — the
+#         in-container agent cannot enumerate, stat, or read any other
+#         vault's repos, worktrees, task files, or creds.
+#
+#   3. $CLOUDE/vaults/$VAULT:...:rw
+#         The resolved vault's directory is bound back into the tmpfs,
+#         rw, at its original path. The agent sees exactly its own
+#         vault and nothing else.
+#
+#   4. $CLOUDE/vaults/$VAULT/tasks/active:...:rw
+#         The active task directory needs a directory-level bind mount
+#         (not the parent rw bind) because Docker single-file bind
+#         mounts pin to the source inode, and Claude Code's atomic-
+#         rename writes would silently break the mount. The dir-level
+#         mount keeps the dir's inode stable across child-file renames.
+#         Today this is a no-op overlay on top of layer 3 (same path,
+#         same rw access), but it is kept explicit so the behavior is
+#         visible at the call site rather than implicit.
+#
+# Credentials are mounted from the vault's creds/ dir, never from the
+# host's ambient $HOME/.config/gh or $HOME/.gitconfig.
+
+DOCKER_RUN_ARGV=(
+    docker run --rm -it --privileged --platform linux/amd64
+    --dns 1.1.1.1 --dns 8.8.8.8
+    -v "$CLAUDE_CREDS_VOLUME":/persist
+    -v "$DIND_VOLUME":/var/lib/docker
+    -v "$CLOUDE":"$CLOUDE":ro
+    --tmpfs "$CLOUDE/vaults"
+    -v "$CLOUDE/vaults/$VAULT":"$CLOUDE/vaults/$VAULT":rw
+    -v "$SOURCE_CLONE":"$SOURCE_CLONE":rw
+    -v "$WORKTREE":"$WORKTREE":rw
+    -v "$CLOUDE/vaults/$VAULT/tasks/active":"$CLOUDE/vaults/$VAULT/tasks/active":rw
+    -v "$CREDS_GH":/home/cloude/.config/gh:ro
+    -v "$CREDS_GITCONFIG":/home/cloude/.gitconfig:ro
+    "${DOCKER_CFG_MOUNT[@]}"
+    "${VAULT_ENV_ARGS[@]}"
+    "${TZ_ENV[@]}"
+    -e "CLOUDE_TASK_FILE=$TASK_FILE"
+    -e "CLOUDE_ROOT=$CLOUDE"
+    -e "CLOUDE_VAULT=$VAULT"
+    -e "DOCKER_HOST=unix:///var/run/docker.sock"
+    -w "$WORKTREE"
+    cloude
     claude --dangerously-skip-permissions --settings /etc/cloude/settings.json
+)
+
+if [[ -n "${CLOUDE_RUN_DRY_RUN:-}" ]]; then
+    # Print one arg per line, each prefixed with DOCKER_RUN_ARGV= so
+    # tests can grep cleanly even if the docker argv contains spaces.
+    for _arg in "${DOCKER_RUN_ARGV[@]}"; do
+        printf 'DOCKER_RUN_ARGV=%s\n' "$_arg"
+    done
+    exit 0
+fi
+
+exec "${DOCKER_RUN_ARGV[@]}"

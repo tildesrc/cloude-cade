@@ -43,7 +43,6 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -61,15 +60,10 @@ from urllib.parse import urlsplit
 BIN = Path(__file__).resolve().parent
 CLOUDE_ROOT = Path(os.environ.get("CLOUDE_ROOT") or BIN.parent)
 
-
-def derive_slug(heading: str) -> str:
-    """Reduce a heading to a filesystem-safe slug.
-
-    Lowercase, replace any non-alphanumeric run with `-`, trim
-    leading/trailing dashes. Same rule the LLM-driven skill applied;
-    centralized here so the dashboard and skill paths agree.
-    """
-    return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+# Slug derivation lives in cloude_org so cloude-list-staging (vault
+# slugs) and this script (idea slugs) apply the same rule.
+sys.path.insert(0, str(BIN))
+from cloude_org import derive_slug  # noqa: E402
 
 
 def parse_repo_url(url: str) -> tuple[str, str]:
@@ -186,7 +180,7 @@ def _read_staging_record(select: int) -> dict[str, str]:
             continue
         key, value = token.split("=", 1)
         record[key] = value
-    required = ("REPO", "HEADING", "MODE")
+    required = ("VAULT", "REPO", "HEADING", "MODE")
     missing = [k for k in required if k not in record]
     if missing:
         _eprint(
@@ -299,6 +293,7 @@ def main(argv: list[str]) -> int:
     select, slug_override = _parse_args(argv)
     record = _read_staging_record(select)
 
+    vault = record.get("VAULT", "").strip()
     repo_url = record.get("REPO", "")
     heading = record.get("HEADING", "")
     mode = record.get("MODE", "")
@@ -306,6 +301,16 @@ def main(argv: list[str]) -> int:
         _eprint(
             f"cloude-promote: cloude-list-staging returned unknown MODE: "
             f"{mode!r}"
+        )
+        return 40
+    if not vault:
+        # cloude-list-staging derives an empty vault slug only when the
+        # vault heading has no alphanumeric content AND no :SLUG: — both
+        # would be authoring bugs in staging.org.
+        _eprint(
+            "cloude-promote: cloude-list-staging returned an empty VAULT. "
+            "Set a :SLUG: on the level-1 vault heading or give the heading "
+            "alphanumeric text."
         )
         return 40
 
@@ -335,7 +340,14 @@ def main(argv: list[str]) -> int:
         )
         return 41
 
-    task_file = CLOUDE_ROOT / "tasks" / "active" / f"{_today_iso()}-{slug}.org"
+    task_file = (
+        CLOUDE_ROOT
+        / "vaults"
+        / vault
+        / "tasks"
+        / "active"
+        / f"{_today_iso()}-{slug}.org"
+    )
 
     # Mode-specific discovery.
     if mode == "standard":
@@ -357,6 +369,7 @@ def main(argv: list[str]) -> int:
     setup_argv = [
         str(BIN / "cloude-promote-setup"),
         "--mode", mode,
+        "--vault", vault,
         "--slug", slug,
         "--repo-url", repo_url,
         "--task-file", str(task_file),

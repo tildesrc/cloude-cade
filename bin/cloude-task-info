@@ -10,20 +10,21 @@
 # Keys emitted (always; empty if unknown):
 #   TODO, TAG, HEADING
 # From the properties drawer:
-#   WORKTREE, BRANCH, PR, REPO, ID, ADOPTED, SKIP_REVIEW, COMPANION
+#   WORKTREE, BRANCH, PR, VAULT, REPO, ID, ADOPTED, SKIP_REVIEW, COMPANION
 # Derived:
 #   SLUG          — filename minus YYYY-MM-DD- prefix and .org suffix
 #   REPO_NAME     — basename(dirname(WORKTREE))
-#   SOURCE_CLONE  — <cloude-root>/repos/<REPO_NAME>
+#   SOURCE_CLONE  — <cloude-root>/vaults/<VAULT>/repos/<REPO_NAME>
 #   TMUX_SESSION  — cloude-<SLUG>
 #   DIND_VOLUME   — cloude-dind-<SLUG>
+#   CLAUDE_CREDS_VOLUME — cloude-claude-creds-<VAULT>
 #
 # Values are shlex.quote'd so the output can be `source`d directly.
 # Exit codes:
 #   0 — success.
 #   2 — file doesn't exist or has no top-level heading.
-#   3 — required property missing (WORKTREE, BRANCH, PR). stderr names
-#       the missing key so callers can tell the user what to fix.
+#   3 — required property missing (WORKTREE, BRANCH, PR, VAULT). stderr
+#       names the missing key so callers can tell the user what to fix.
 
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ except ModuleNotFoundError:
     sys.exit(2)
 
 
-REQUIRED = ("WORKTREE", "BRANCH", "PR")
+REQUIRED = ("WORKTREE", "BRANCH", "PR", "VAULT")
 OPTIONAL = ("REPO", "ID", "ADOPTED", "SKIP_REVIEW", "COMPANION")
 
 # Share the ball-tag priority order with the rest of the workflow
@@ -106,18 +107,24 @@ def main(argv: list[str]) -> int:
         _emit(key, (props.get(key) or "").strip())
 
     slug = _slug_from_filename(path)
+    vault = props["VAULT"].strip()
     worktree = props["WORKTREE"].strip()
     repo_name = Path(worktree).parent.name
-    # Task files always live at <cloude-root>/tasks/active/<file>.org, so
-    # the file path itself anchors cloude-root reliably — no need to
-    # depend on this script's install location or an env var.
-    cloude_root = path.parent.parent.parent
+    # Task files always live at <cloude-root>/vaults/<vault>/tasks/active/
+    # <file>.org, so the file path itself anchors cloude-root reliably —
+    # no need to depend on this script's install location or an env var.
+    # Five parents up: file → active → tasks → <vault> → vaults → <cloude-root>.
+    cloude_root = path.parents[4]
 
     _emit("SLUG", slug)
     _emit("REPO_NAME", repo_name)
-    _emit("SOURCE_CLONE", str(cloude_root / "repos" / repo_name))
+    _emit(
+        "SOURCE_CLONE",
+        str(cloude_root / "vaults" / vault / "repos" / repo_name),
+    )
     _emit("TMUX_SESSION", f"cloude-{slug}")
     _emit("DIND_VOLUME", f"cloude-dind-{slug}")
+    _emit("CLAUDE_CREDS_VOLUME", f"cloude-claude-creds-{vault}")
     _emit("CLOUDE_ROOT", str(cloude_root))
     return 0
 

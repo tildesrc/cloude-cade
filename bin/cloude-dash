@@ -5,11 +5,12 @@
 # ///
 # Curses dashboard for the state of all cloude tasks.
 #
-# Reads every org file under tasks/ (active, staging, done) and renders
-# a single ranked view: active first (sorted by stage priority), then
+# Reads every org file across all vaults (vaults/*/tasks/active and
+# vaults/*/tasks/done) plus the shared tasks/staging.org and renders a
+# single ranked view: active first (sorted by stage priority), then
 # staging ideas, then a tail of recently finalized tasks (COMPLETE or
-# DROPPED). Enter on a row with a :PR: property opens the PR in the
-# default browser.
+# DROPPED). Each row carries its vault. Enter on a row with a :PR:
+# property opens the PR in the default browser.
 
 from __future__ import annotations
 
@@ -38,12 +39,18 @@ except ModuleNotFoundError:
 
 CLOUDE_ROOT = Path(__file__).resolve().parent.parent
 TASKS = CLOUDE_ROOT / "tasks"
+VAULTS = CLOUDE_ROOT / "vaults"
 
 # The workflow stage model is shared with the hook scripts via the
 # sibling `cloude_stages` module — keep the keyword list / dashboard
 # ordering / terminal subset / ball-tag priority in one place.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloude_stages import BALL_TAGS, dashboard_order_map, terminal  # noqa: E402
+
+# Shared slug-derivation rule — same shape /promote and
+# cloude-list-staging use. Renamed locally to keep the existing
+# private-helper-style name space.
+from cloude_org import derive_slug as _derive_slug  # noqa: E402
 
 ACTIVE = "ACTIVE"
 STAGING = "STAGING"
@@ -66,6 +73,9 @@ class Task:
     pr_url: str | None
     repo: str | None    # raw :REPO: URL at load; rewritten to the
                         # staging.org project header by load_tasks()
+    vault: str          # vault slug — directory name for active/done
+                        # rows, level-1 staging.org heading slug for
+                        # staging/todo rows. Empty for malformed rows.
     path: Path
     ctime: float  # st_ctime, used to identify just-promoted ACTIVE
                   # rows and to sort the RECENT section by recency of
@@ -79,7 +89,7 @@ def _ball_tag(tags) -> str:
     return ""
 
 
-def _load_single_task_file(path: Path, section: str) -> Task | None:
+def _load_single_task_file(path: Path, section: str, vault: str) -> Task | None:
     try:
         root = orgparse.load(str(path))
     except Exception:
@@ -97,6 +107,7 @@ def _load_single_task_file(path: Path, section: str) -> Task | None:
         title=str(h.heading).strip(),
         pr_url=pr if pr else None,
         repo=props.get("REPO") or None,
+        vault=vault,
         path=path,
         ctime=path.stat().st_ctime,
     )
@@ -106,6 +117,11 @@ def _load_staging(
     path: Path,
 ) -> tuple[list[Task], dict[str, list[Task]], dict[str, str]]:
     """Split staging children into (staging, todo_sections, repo_names).
+
+    staging.org outline:
+        level 1 = vault         (:SLUG: optional; heading-derive fallback)
+        level 2 = project       (with :REPO: → promotable, without → TODO)
+        level 3 = idea
 
     Projects with a `:REPO:` property hold promotable ideas, which go
     into `staging`. Projects without `:REPO:` hold personal todos; we
@@ -128,47 +144,55 @@ def _load_staging(
     todo_sections: dict[str, list[Task]] = {}
     repo_names: dict[str, str] = {}
     ctime = path.stat().st_ctime
-    for project in root.children:
-        props = dict(project.properties) if project.properties else {}
-        repo_url = props.get("REPO") or None
-        is_promotable = bool(repo_url)
-        project_name = str(project.heading).strip()
-        if repo_url:
-            repo_names.setdefault(_repo_key(repo_url), project_name)
-        for idea in project.children:
-            idea_title = str(idea.heading).strip()
-            tag = _ball_tag(idea.tags)
-            if is_promotable:
-                staging.append(
-                    Task(
-                        section=STAGING,
-                        state="",
-                        tag=tag,
-                        title=idea_title,
-                        pr_url=None,
-                        repo=repo_url,
-                        path=path,
-                        ctime=ctime,
+    for vault_node in root.children:
+        vault_props = dict(vault_node.properties) if vault_node.properties else {}
+        vault_heading = str(vault_node.heading).strip()
+        vault_slug = (vault_props.get("SLUG") or "").strip() or _derive_slug(
+            vault_heading
+        )
+        for project in vault_node.children:
+            props = dict(project.properties) if project.properties else {}
+            repo_url = props.get("REPO") or None
+            is_promotable = bool(repo_url)
+            project_name = str(project.heading).strip()
+            if repo_url:
+                repo_names.setdefault(_repo_key(repo_url), project_name)
+            for idea in project.children:
+                idea_title = str(idea.heading).strip()
+                tag = _ball_tag(idea.tags)
+                if is_promotable:
+                    staging.append(
+                        Task(
+                            section=STAGING,
+                            state="",
+                            tag=tag,
+                            title=idea_title,
+                            pr_url=None,
+                            repo=repo_url,
+                            vault=vault_slug,
+                            path=path,
+                            ctime=ctime,
+                        )
                     )
-                )
-            else:
-                keyword = (idea.todo or "").strip() or TODO
-                # Non-repo rows carry the parent project name as a
-                # prefix so the dashboard shows project grouping
-                # alongside the TODO-keyword grouping.
-                title = f"[{project_name}] {idea_title}"
-                todo_sections.setdefault(keyword, []).append(
-                    Task(
-                        section=keyword,
-                        state="",
-                        tag=tag,
-                        title=title,
-                        pr_url=None,
-                        repo=None,
-                        path=path,
-                        ctime=ctime,
+                else:
+                    keyword = (idea.todo or "").strip() or TODO
+                    # Non-repo rows carry the parent project name as a
+                    # prefix so the dashboard shows project grouping
+                    # alongside the TODO-keyword grouping.
+                    title = f"[{project_name}] {idea_title}"
+                    todo_sections.setdefault(keyword, []).append(
+                        Task(
+                            section=keyword,
+                            state="",
+                            tag=tag,
+                            title=title,
+                            pr_url=None,
+                            repo=None,
+                            vault=vault_slug,
+                            path=path,
+                            ctime=ctime,
+                        )
                     )
-                )
     return staging, todo_sections, repo_names
 
 
@@ -207,25 +231,42 @@ def _repo_label(url: str | None, repo_names: dict[str, str]) -> str:
     return repo_names.get(_repo_key(url)) or _repo_path(url)
 
 
+def _iter_vault_dirs() -> list[Path]:
+    """Return per-vault directories under `vaults/`, sorted by slug.
+
+    Each subdirectory is treated as a vault even if it's missing some
+    of `repos/`, `worktrees/`, `tasks/`, `creds/` — the absent ones
+    simply contribute no rows to the dashboard.
+    """
+    if not VAULTS.is_dir():
+        return []
+    return [d for d in sorted(VAULTS.iterdir()) if d.is_dir()]
+
+
 def load_tasks() -> dict[str, list[Task] | dict[str, list[Task]]]:
     # Load staging first: it yields the repo-URL -> project-header map
     # used to label every other task's :REPO: URL below.
     staging, todo_sections, repo_names = _load_staging(TASKS / "staging.org")
 
     active: list[Task] = []
-    for p in sorted((TASKS / "active").glob("*.org")):
-        t = _load_single_task_file(p, ACTIVE)
-        if t:
-            active.append(t)
-    active.sort(key=lambda t: (STAGE_ORDER.get(t.state, 99), t.path.name))
-
     recent: list[Task] = []
-    done_dir = TASKS / "done"
-    if done_dir.exists():
-        for p in done_dir.glob("*.org"):
-            t = _load_single_task_file(p, RECENT)
-            if t:
-                recent.append(t)
+    for vault_dir in _iter_vault_dirs():
+        vault_slug = vault_dir.name
+        active_dir = vault_dir / "tasks" / "active"
+        if active_dir.is_dir():
+            for p in sorted(active_dir.glob("*.org")):
+                t = _load_single_task_file(p, ACTIVE, vault_slug)
+                if t:
+                    active.append(t)
+        done_dir = vault_dir / "tasks" / "done"
+        if done_dir.is_dir():
+            for p in done_dir.glob("*.org"):
+                t = _load_single_task_file(p, RECENT, vault_slug)
+                if t:
+                    recent.append(t)
+    active.sort(
+        key=lambda t: (STAGE_ORDER.get(t.state, 99), t.vault, t.path.name)
+    )
     recent.sort(key=lambda t: t.ctime, reverse=True)
     recent = recent[:RECENT_LIMIT]
 
@@ -1049,14 +1090,15 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
             # tasks/active/ carry a stale tag — suppress it.
             show_tag = bool(t.tag) and t.state not in TERMINAL_STATES
             tag = f":{t.tag}:".ljust(10) if show_tag else "".ljust(10)
+            vault_col = (t.vault or "").ljust(10)
             repo = t.repo or ""
             if t.section == RECENT:
                 date = _date_from_filename(t.path)
                 slug = _slug_from_filename(t.path)
-                line = f"{marker} {state} {date}  {slug}"
+                line = f"{marker} {state} {vault_col} {date}  {slug}"
                 right = repo
             else:
-                line = f"{marker} {state} {tag} {t.title}"
+                line = f"{marker} {state} {vault_col} {tag} {t.title}"
                 # Right margin: PR number then project header, two
                 # spaces apart; either part may be absent.
                 right = "  ".join(x for x in (_pr_number(t.pr_url), repo) if x)
@@ -1066,7 +1108,9 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
             stdscr.addnstr(y, 0, line, w - 1, attr)
             if show_tag and t.section != RECENT and not attr:
                 tag_str = f":{t.tag}:"
-                tag_col = 2 + len(state) + 1
+                # Column origin: 2 chars (marker+space) + state(9) + space
+                # + vault_col(10) + space.
+                tag_col = 2 + len(state) + 1 + len(vault_col) + 1
                 if tag_col + len(tag_str) < w:
                     stdscr.addnstr(y, tag_col, tag_str, len(tag_str), _color(stdscr, t.tag))
         y += 1

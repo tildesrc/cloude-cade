@@ -4,7 +4,7 @@
 #+STARTUP: overview logdrawer
 
 # To start a task:
-#   cp tasks/TEMPLATE.org tasks/active/$(date +%F)-<slug>.org
+#   cp tasks/TEMPLATE.org vaults/<vault>/tasks/active/$(date +%F)-<slug>.org
 # Then fill in the title, properties, and goal. Initial state is
 # PLANNING with the :user: tag - the task is waiting for the user to
 # give the planning prompt.

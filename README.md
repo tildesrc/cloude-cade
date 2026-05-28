@@ -56,10 +56,12 @@ that re-execs through it) find their interpreter there; the container
 image gets the matching venv at `/opt/cloude-venv/` baked in by
 `make build`, from the same lockfile.
 
-After `make login` exits, your Claude credentials live in the
-`cloude-claude-creds` Docker volume and persist across every task and
-restart, so you won't need to log in again. Run `make help` for the
-rest of the targets (rebuild, clean, etc.).
+After `make login` exits, your Claude credentials live in a
+per-vault `cloude-claude-creds-<vault-slug>` Docker volume and persist
+across every task and restart, so you won't need to log in again for
+that vault. (See [Vaults](#vaults) for how repos are partitioned across
+vaults — `make login` targets your default vault on first run.) Run
+`make help` for the rest of the targets (rebuild, clean, etc.).
 
 `make test` runs the pytest suite under `tests/` (which depends on
 `sync`, so a fresh checkout just needs `make test` to land on green).
@@ -232,8 +234,8 @@ See [Dashboard](#dashboard) for the full key list.
 6. **Merge.** In `MERGING`, `/babysit-merge` drives the merge queue and
    auto-advances the task to `COMPLETE` once the PR lands.
 7. **Clean up.** Back on the host, `/sweep` surfaces finished tasks and
-   `/finalize` moves the file to `tasks/done/` and tears down the
-   worktree, tmux session, and branch.
+   `/finalize` moves the file to the vault's `tasks/done/` and tears
+   down the worktree, tmux session, and branch.
 
 ### Where to go next
 
@@ -247,22 +249,36 @@ See [Dashboard](#dashboard) for the full key list.
 
 Each chunk of work — its current state and full history — is tracked in an
 Emacs `org-mode` file. The layout is designed so that multiple agents can
-update task state concurrently without conflicting:
+update task state concurrently without conflicting, and each task's
+data is partitioned under a per-vault directory so containers in
+different vaults can't see each other's work (see
+[Vaults](#vaults)):
 
 ```
 tasks/
-  staging.org            ;; lightweight captures, not yet started
-  active/                ;; one file per in-flight task
-    YYYY-MM-DD-<slug>.org
-  done/                  ;; one file per finalized task (COMPLETE or DROPPED)
-    YYYY-MM-DD-<slug>.org
+  staging.org            ;; lightweight captures, not yet started (SHARED across vaults)
   TEMPLATE.org           ;; scaffold for new active tasks (copy, don't edit)
+
+vaults/
+  <vault-slug>/
+    repos/<repo>/        ;; bare-ish clone, used as the worktree source
+    worktrees/<repo>/<task-slug>/
+    tasks/
+      active/            ;; one file per in-flight task
+        YYYY-MM-DD-<slug>.org
+      done/              ;; one file per finalized task (COMPLETE or DROPPED)
+        YYYY-MM-DD-<slug>.org
+    creds/               ;; per-vault credentials, see [Vaults](#vaults)
+      gh/
+      gitconfig
+      env
 ```
 
 - **Top-level state** is encoded by which directory a task lives in
-  (`tasks/staging.org` → `tasks/active/` → `tasks/done/`). The
-  high-level overview comes from directory listings, not a global
-  index file. Within `tasks/done/`, the heading's TODO keyword
+  (`tasks/staging.org` → `vaults/<vault>/tasks/active/` →
+  `vaults/<vault>/tasks/done/`). The high-level overview comes from
+  directory listings, not a global index file. Within
+  `vaults/<vault>/tasks/done/`, the heading's TODO keyword
   (`COMPLETE` vs `DROPPED`) distinguishes the two terminal outcomes.
 - **Workflow stage** is encoded by the TODO keyword inside each active
   file (see below), so org-mode's logbook captures every state transition.
@@ -270,10 +286,10 @@ tasks/
   agents updating their own tasks don't conflict.
 
 Each active task file's heading carries a properties drawer with
-metadata (`:REPO:`, `:BRANCH:`, `:WORKTREE:`, `:PR:`, etc.) that the
-agent fills in as the task progresses. You normally don't hand-edit
-those fields — see [`docs/internals.md`](docs/internals.md) for the
-full schema.
+metadata (`:VAULT:`, `:REPO:`, `:BRANCH:`, `:WORKTREE:`, `:PR:`, etc.)
+that the agent fills in as the task progresses. You normally don't
+hand-edit those fields — see [`docs/internals.md`](docs/internals.md)
+for the full schema.
 
 ### Workflow states
 
@@ -316,35 +332,49 @@ call.
 
 ### staging.org structure
 
-Top-level headings in `tasks/staging.org` are **projects**. A project
-carries a `:REPO:` property pointing to its GitHub repo, so when a
-task is promoted from staging to active the agent knows which repo to
-open a branch in. Ideas live as sub-headings under their project:
+`tasks/staging.org` is a three-level outline: **vault → project → idea**.
+
+- **Top-level (level 1) headings are vaults.** Each vault carries an
+  optional `:SLUG:` property naming the directory under `vaults/`
+  where its repos, worktrees, task files, and credentials live. If
+  `:SLUG:` is absent the slug is derived from the heading text (the
+  same regex idea slugs use).
+- **Level-2 headings under a vault are projects.** A project carries
+  a `:REPO:` property pointing to its GitHub repo so `/promote` knows
+  which repo to open a branch in. Optional `:SKIP_REVIEW: t` skips
+  the `REVIEW` stage for tasks promoted from this project (the same
+  way `:REPO:` travels).
+- **Level-3 headings under a project are ideas** — promotable
+  individual tasks.
 
 ```org
-* cloude
+* Personal
   :PROPERTIES:
-  :REPO: https://github.com/<org>/cloude
+  :SLUG: personal
   :END:
-** Add a task-promotion script
-** Hook to auto-move COMPLETE files
+** cloude-cade
+   :PROPERTIES:
+   :REPO: https://github.com/<org>/cloude-cade
+   :SKIP_REVIEW: t
+   :END:
+*** Add a task-promotion script
+*** Hook to auto-move COMPLETE files
+
+* Work
+  :PROPERTIES:
+  :SLUG: work
+  :END:
+** acme-webapp
+   :PROPERTIES:
+   :REPO: git@github.com:acme/webapp.git
+   :END:
+*** Migrate auth middleware
 ```
 
-A project may also carry an optional `:SKIP_REVIEW: t` property. It
-marks a repo that doesn't require peer review: `/promote` copies it
-into every task file promoted from that project (the same way `:REPO:`
-travels), and `/advance` then skips the `REVIEW` stage for those tasks
-(see [Workflow states](#workflow-states)). Omit it for repos that do
-require review — that's the default.
-
-```org
-* cloude-cade
-  :PROPERTIES:
-  :REPO: https://github.com/<org>/cloude-cade
-  :SKIP_REVIEW: t
-  :END:
-** Add a task-promotion script
-```
+When `/promote` runs, the resolved vault slug becomes the directory
+name under `vaults/` AND lands in the active task file's `:VAULT:`
+property; `cloude-run` uses both to mount the right credentials and
+hide sibling vaults from the container.
 
 **Idea-level properties.** Each idea sub-heading may itself carry an
 optional properties drawer with `:ADOPT:`, `:COMPANION:`, and/or
@@ -364,8 +394,9 @@ optional properties drawer with `:ADOPT:`, `:COMPANION:`, and/or
   the slug is derived from the heading (lowercase, non-alphanumerics
   replaced with `-`, trimmed); setting `:SLUG:` lets you pin a
   shorter or otherwise different slug. The slug is what the task
-  file (`tasks/active/YYYY-MM-DD-<slug>.org`), the feature branch
-  (`cloude/<slug>`), the worktree, and the tmux session
+  file (`vaults/<vault>/tasks/active/YYYY-MM-DD-<slug>.org`), the
+  feature branch (`cloude/<slug>`), the worktree
+  (`vaults/<vault>/worktrees/<repo>/<slug>`), and the tmux session
   (`cloude-<slug>`) are all named after. Normally set automatically
   by the staging-slug watcher (see [Slug suggestions](#slug-suggestions)
   below), but you can hand-edit it too — a user-set `:SLUG:` is
@@ -465,18 +496,86 @@ and lands in `.venv-host/` on `make sync`. Set
 You can also run `/suggest-slugs` manually at any time — the
 watcher isn't required for the on-demand path.
 
+## Vaults
+
+A **vault** is an isolation boundary that sits above repos. Repos in
+the same vault share a GitHub identity, a Claude credential set, and
+visibility into each other's task files; repos in different vaults
+are mutually invisible to each other's in-container agents — they
+can't enumerate, read, or stat anything outside their own vault.
+
+This matters when you mix work that wants distinct GitHub identities
+(e.g. a personal vault that pushes to your own GitHub account vs. a
+work vault that pushes via a work account / token) and you don't
+want the in-container agent for one to have access to the other.
+
+### What's vault-scoped
+
+Vault-scoped (per-vault on disk + per-vault visibility):
+
+- **Source clones, worktrees, active and done task files** — all live
+  under `vaults/<vault>/`. The container only sees its own vault.
+- **GitHub identity** — the container mounts a vault-specific
+  `~/.config/gh` directory and gets a vault-specific `GH_TOKEN`. The
+  host's ambient `$GH_TOKEN` and `~/.config/gh` are **not** forwarded
+  in.
+- **Git config** — the container mounts a vault-specific `~/.gitconfig`
+  (lets you set `user.email` per vault).
+- **Claude credentials** — each vault has its own
+  `cloude-claude-creds-<vault-slug>` Docker volume holding the
+  `~/.claude/` state. First-time setup requires one `claude login`
+  per vault.
+
+Vault-shared (not isolated):
+
+- **`tasks/staging.org`** — captured ideas live in one shared file
+  with vaults at level 1 so you (the human author) can see and
+  prioritize across the whole tree. The promote-time mechanics route
+  each idea to the right vault automatically.
+- **Host helper scripts and the cloude repo itself** — mounted
+  read-only into every container.
+
+### Setting up a vault
+
+Add a level-1 vault heading to `tasks/staging.org` (see
+[staging.org structure](#stagingorg-structure)), then populate the
+vault's credentials directory:
+
+```sh
+VAULT=personal   # or whatever :SLUG: you set
+mkdir -p vaults/$VAULT/creds/gh
+cp -r ~/.config/gh/. vaults/$VAULT/creds/gh/
+cp ~/.gitconfig vaults/$VAULT/creds/gitconfig
+echo GH_TOKEN=ghp_your_personal_token > vaults/$VAULT/creds/env
+```
+
+`bin/cloude-run` validates that `creds/gh/`, `creds/gitconfig`, and
+`creds/env` all exist before launching a container — a missing entry
+prints the populate-it instructions and exits. There's no fallback to
+the host's ambient credentials: if the vault isn't set up, the
+container doesn't start.
+
+`creds/env` is a `KEY=value` file (one per line; `#` comments
+allowed). At minimum it should set `GH_TOKEN`. Any other variables
+listed there are forwarded into the container too.
+
+The first time you run a task in a fresh vault, run `make login`
+inside the container (or, equivalently, `claude login` from the
+container shell) so the Claude credentials get seeded into that
+vault's Docker volume. Subsequent tasks reuse it.
+
 ## Dashboard
 
 `bin/cloude-dash` is a curses TUI that surfaces the state of every task
 in one screen. It parses each `tasks/**/*.org` file with `orgparse` and
 renders the following sections:
 
-- **ACTIVE** — one row per file in `tasks/active/`, sorted by stage
-  priority (`MERGING` first, then `REVIEW`, `ITERATING`, `PLANNING`).
-  Each row shows the TODO keyword, who currently has the ball
-  (`:agent:` green, `:user:` yellow, `:blocked:` red), the heading,
-  then a right-aligned repo label and the PR number from the `:PR:`
-  property. A task that has reached a terminal state
+- **ACTIVE** — one row per file across every `vaults/*/tasks/active/`,
+  sorted by stage priority (`MERGING` first, then `REVIEW`,
+  `ITERATING`, `PLANNING`) and then by vault. Each row shows the vault
+  slug, the TODO keyword, who currently has the ball (`:agent:` green,
+  `:user:` yellow, `:blocked:` red), the heading, then a right-aligned
+  repo label and the PR number from the `:PR:` property. A task that has reached a terminal state
   (`COMPLETE`/`DROPPED`) but is still awaiting host-side `/finalize`
   shows no ball tag — the tag is only meaningful while a task is in
   flight.
@@ -490,8 +589,8 @@ renders the following sections:
   keyword between `STAGING` and `RECENT`, and each row is prefixed
   with the project name in brackets (e.g. `[Live Nation] …`). Not
   promotable.
-- **RECENT** — the 20 most-recently-touched files from
-  `tasks/done/`.
+- **RECENT** — the 20 most-recently-touched files across every
+  `vaults/*/tasks/done/`.
 
 ACTIVE, STAGING, and RECENT rows are labelled with the repo the task
 belongs to, shown right-aligned just left of the PR number. The label
@@ -519,7 +618,7 @@ visible at the margins and there's no `endwin()` flash. For a task
 already in `COMPLETE` or `DROPPED` the cleanup runs straight away
 (verify-or-close the PR, kill the tmux session, remove the worktree
 and DinD volume, delete the local branch on COMPLETE, move the task
-file out of `tasks/active/`). For a task still in a non-terminal
+file out of `vaults/<vault>/tasks/active/`). For a task still in a non-terminal
 state, the modal first asks `Force-drop and finalize? [y/N]` in its
 footer; on `y` it runs the cleanup with `--force-drop`. The
 override-able exit codes (dirty worktree, in-use DinD volume,
@@ -615,7 +714,7 @@ you invoke by hand:
   (a deterministic Python orchestrator that performs the gh
   discovery, slug derivation, and flag wiring without any LLM
   involvement). Standard mode creates a `cloude/<slug>` branch, a
-  worktree under `worktrees/<repo-name>/<slug>`, a draft PR, and a
+  worktree under `vaults/<vault>/worktrees/<repo-name>/<slug>`, a draft PR, and a
   detached `cloude-<slug>` tmux session — starts in `PLANNING :user:`,
   with the container's Claude Code input box pre-filled with the
   staging entry as the planning prompt. If the staging idea carries
@@ -627,7 +726,7 @@ you invoke by hand:
   the adopted work. Because the orchestrator is deterministic, the
   dashboard's `P` key can run it directly — see
   [Dashboard](#dashboard).
-- **`/sweep`** — Scan `tasks/active/` for tasks whose TODO keyword is
+- **`/sweep`** — Scan every `vaults/*/tasks/active/` for tasks whose TODO keyword is
   already `COMPLETE` or `DROPPED` (the in-container agent has flipped
   the state but the file is still in `active/`). For each candidate,
   prompts `Approve /finalize for <task>? [y/N/skip]` and only invokes
@@ -640,9 +739,9 @@ you invoke by hand:
   current TODO state, asks which to finalize. For `COMPLETE`,
   verifies the PR is merged, kills the tmux session, removes the
   worktree and the task's DinD volume, deletes the local branch, and
-  moves the task file to `tasks/done/`. For `DROPPED`, closes the
+  moves the task file to its vault's `tasks/done/`. For `DROPPED`, closes the
   PR, kills the tmux session, removes the worktree and DinD volume,
-  preserves the local branch, and moves the file to `tasks/done/`.
+  preserves the local branch, and moves the file to the vault's `tasks/done/`.
   Force-drop is allowed from any non-terminal state; force-complete
   is not (COMPLETE requires the agent to have verified the merge).
 - **`/suggest-slugs-watch`** — Arm the staging-slug watcher in this

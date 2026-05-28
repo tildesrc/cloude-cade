@@ -5,13 +5,17 @@
 # ///
 # List active task files for /sweep and /finalize.
 #
+# Walks every vault: vaults/*/tasks/active/*.org. Each row carries the
+# vault slug it came out of so callers can disambiguate. Use --vault
+# <slug> to scope the listing to a single vault.
+#
 # Default output (stdout):
 #
-#   1) [PLANNING :user:] task heading text  (tasks/active/2026-05-15-foo.org)
-#   2) [MERGING :agent:] another task       (tasks/active/2026-05-14-bar.org)
+#   1) [personal] [PLANNING :user:] task heading text  (vaults/personal/tasks/active/2026-05-15-foo.org)
+#   2) [work]     [MERGING :agent:] another task       (vaults/work/tasks/active/2026-05-14-bar.org)
 #
 # Sorted by stage priority (matching cloude-dash's STAGE_ORDER), then
-# filename, so the listing is stable across runs.
+# vault, then filename, so the listing is stable across runs.
 #
 # With --terminal: filters to TODO ∈ {COMPLETE, DROPPED}. If the
 # filtered set is empty, prints exactly:
@@ -19,6 +23,8 @@
 #   No tasks awaiting finalize.
 #
 # …and exits 0 (this is /sweep's idle-tick output).
+#
+# With --vault <slug>: filters to tasks under vaults/<slug>/tasks/active/.
 
 from __future__ import annotations
 
@@ -41,7 +47,7 @@ except ModuleNotFoundError:
 CLOUDE_ROOT = Path(
     os.environ.get("CLOUDE_ROOT") or Path(__file__).resolve().parent.parent
 )
-ACTIVE = CLOUDE_ROOT / "tasks" / "active"
+VAULTS = CLOUDE_ROOT / "vaults"
 
 # Stage ordering / terminal subset / ball-tag priority all come from
 # the workflow model so they stay in lockstep with cloude-dash.
@@ -59,7 +65,7 @@ def _ball_tag(tags) -> str:
     return ""
 
 
-def _load_task(path: Path):
+def _load_task(path: Path, vault: str):
     try:
         root = orgparse.load(str(path))
     except Exception:
@@ -73,7 +79,30 @@ def _load_task(path: Path):
         _ball_tag(h.tags),
         str(h.heading).strip(),
         path,
+        vault,
     )
+
+
+def _iter_active(vault_filter: str | None):
+    """Yield (path, vault) for every active task file across vaults.
+
+    `vault_filter`, when set, restricts to that single vault. Vaults
+    are sorted by directory name so the global enumeration order is
+    deterministic.
+    """
+    if not VAULTS.is_dir():
+        return
+    for vault_dir in sorted(VAULTS.iterdir()):
+        if not vault_dir.is_dir():
+            continue
+        vault_slug = vault_dir.name
+        if vault_filter is not None and vault_slug != vault_filter:
+            continue
+        active_dir = vault_dir / "tasks" / "active"
+        if not active_dir.is_dir():
+            continue
+        for p in sorted(active_dir.glob("*.org")):
+            yield p, vault_slug
 
 
 def main(argv: list[str]) -> int:
@@ -83,14 +112,18 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Only list tasks in COMPLETE or DROPPED.",
     )
+    parser.add_argument(
+        "--vault",
+        metavar="SLUG",
+        help="Restrict listing to a single vault.",
+    )
     args = parser.parse_args(argv)
 
     rows = []
-    if ACTIVE.is_dir():
-        for p in sorted(ACTIVE.glob("*.org")):
-            t = _load_task(p)
-            if t:
-                rows.append(t)
+    for path, vault in _iter_active(args.vault):
+        t = _load_task(path, vault)
+        if t:
+            rows.append(t)
 
     if args.terminal:
         rows = [r for r in rows if r[0] in TERMINAL_STATES]
@@ -98,17 +131,17 @@ def main(argv: list[str]) -> int:
             print("No tasks awaiting finalize.")
             return 0
 
-    rows.sort(key=lambda r: (STAGE_ORDER.get(r[0], 99), r[3].name))
+    rows.sort(key=lambda r: (STAGE_ORDER.get(r[0], 99), r[4], r[3].name))
 
-    for i, (todo, tag, heading, path) in enumerate(rows, start=1):
+    for i, (todo, tag, heading, path, vault) in enumerate(rows, start=1):
         tag_str = f":{tag}:" if tag else ""
-        # Path printed relative to CLOUDE_ROOT for terseness, like prose
-        # in the skills uses ("tasks/active/<filename>.org").
+        # Path printed relative to CLOUDE_ROOT for terseness — eg.
+        # `vaults/personal/tasks/active/<filename>.org`.
         try:
             rel = path.relative_to(CLOUDE_ROOT)
         except ValueError:
             rel = path
-        print(f"{i}) [{todo} {tag_str}] {heading}  ({rel})")
+        print(f"{i}) [{vault}] [{todo} {tag_str}] {heading}  ({rel})")
     return 0
 
 

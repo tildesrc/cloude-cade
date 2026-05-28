@@ -11,7 +11,7 @@
 #   4. Remove the git worktree.
 #   5. Remove the DinD volume (cloude-dind-<slug>).
 #   6. (COMPLETE only) delete the local branch.
-#   7. Move the task file into tasks/done/.
+#   7. Move the task file into vaults/<vault>/tasks/done/.
 #   8. Print a summary block on stdout.
 #
 # Judgment-call cases bail with distinct exit codes so the calling
@@ -135,9 +135,10 @@ info_out="$("$TASK_INFO" "$TASK_FILE")" || {
 }
 eval "$info_out"
 
-# $TODO $TAG $HEADING $WORKTREE $BRANCH $PR $REPO $ID
+# $TODO $TAG $HEADING $WORKTREE $BRANCH $PR $VAULT $REPO $ID
 # $ADOPTED $COMPANION
-# $SLUG $REPO_NAME $SOURCE_CLONE $TMUX_SESSION $DIND_VOLUME $CLOUDE_ROOT
+# $SLUG $REPO_NAME $SOURCE_CLONE $TMUX_SESSION $DIND_VOLUME
+# $CLAUDE_CREDS_VOLUME $CLOUDE_ROOT
 
 # --- Step 2: decide action from $TODO --------------------------------------
 #
@@ -400,7 +401,7 @@ fi
 
 # --- Step 7: move the task file --------------------------------------------
 
-DEST_DIR="$CLOUDE_ROOT/tasks/done"
+DEST_DIR="$CLOUDE_ROOT/vaults/$VAULT/tasks/done"
 mkdir -p "$DEST_DIR"
 DEST="$DEST_DIR/$(basename "$TASK_FILE")"
 if ! mv "$TASK_FILE" "$DEST"; then

@@ -21,6 +21,7 @@ progresses; humans rarely hand-edit them.
 | Property         | Meaning                                                        |
 | ---------------- | -------------------------------------------------------------- |
 | `:ID:`           | Stable task identifier, matches the filename (`YYYY-MM-DD-<slug>`). |
+| `:VAULT:`        | Vault slug — the directory name under `vaults/` where this task's clone, worktree, and active/done files live. Carried from the level-1 vault heading in `tasks/staging.org`. `cloude-run` cross-checks it against the path-derived vault and refuses to launch on a mismatch. |
 | `:REPO:`         | GitHub repo the task lives in. Carried from the staging project. |
 | `:BRANCH:`       | Feature branch name in the repo.                                |
 | `:WORKTREE:`     | Local git worktree path where the agent works.                  |
@@ -28,15 +29,15 @@ progresses; humans rarely hand-edit them.
 | `:AGENT:`        | Link to the agent session driving the task.                     |
 | `:ADOPTED:`      | *(optional)* `t` if the task was promoted in ADOPT mode (existing PR adopted, not freshly created). |
 | `:SKIP_REVIEW:`  | *(optional)* `t` if the repo opts out of peer review. Carried from the staging project; makes `/advance` skip the `REVIEW` stage (`ITERATING → MERGING`). |
-| `:COMPANION:`    | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `tasks/{active,done}/<id>.org`. |
+| `:COMPANION:`    | *(optional)* ID of a sibling cloude task this task is paired with (slug-dated form, e.g. `2026-05-20-acme-webapp-side`) — used when work spans two cloude tasks (typically in different repos) that should land together. Resolves to a file by scanning `vaults/<vault>/tasks/{active,done}/<id>.org` within the same vault. |
 
-`:ID:` and `:REPO:` are set when the task is promoted from staging.
-The rest are filled in as the task progresses (branch + worktree at
-the start of `PLANNING`, `:PR:` at the end of `PLANNING`, `:AGENT:`
-whenever an agent is attached). `:ADOPTED:`, `:SKIP_REVIEW:`, and
-`:COMPANION:` are set by `/promote` when the situation applies
-(see *Staging-idea trigger properties* below for what each one keys
-off of); they're omitted on ordinary tasks.
+`:ID:`, `:VAULT:`, and `:REPO:` are set when the task is promoted
+from staging. The rest are filled in as the task progresses (branch
++ worktree at the start of `PLANNING`, `:PR:` at the end of
+`PLANNING`, `:AGENT:` whenever an agent is attached). `:ADOPTED:`,
+`:SKIP_REVIEW:`, and `:COMPANION:` are set by `/promote` when the
+situation applies (see *Staging-idea trigger properties* below for
+what each one keys off of); they're omitted on ordinary tasks.
 
 ## Staging-idea trigger properties
 
@@ -317,18 +318,22 @@ dependency, and runs on plain `python3`.
   `.claude/settings.json` — `repo-hooks/cloude-cade` strips the
   `SessionStart` entry from the worktree's copy before container
   start.
-- **`cloude-list-active`** — Print active tasks under
-  `tasks/active/`, numbered, sorted by stage priority (matching the
-  dashboard's `MERGING → REVIEW → ITERATING → PLANNING` order). With
+- **`cloude-list-active`** — Print active tasks across every vault
+  (`vaults/*/tasks/active/`), numbered, sorted by stage priority
+  (matching the dashboard's `MERGING → REVIEW → ITERATING →
+  PLANNING` order) and tagged with the row's vault slug. With
   `--terminal`, filters to `COMPLETE`/`DROPPED`; if the filtered set
   is empty, prints exactly `No tasks awaiting finalize.` and exits 0
   — this is `/sweep`'s idle-tick output and what makes a `/loop
-  /sweep` cheap. Used by `/sweep` and `/finalize` step 1.
+  /sweep` cheap. With `--vault <slug>`, restricts the listing to a
+  single vault. Used by `/sweep` and `/finalize` step 1.
 - **`cloude-task-info <task-file>`** — Emit `KEY=VALUE` (shell-safe)
   lines for the heading TODO/tag/text, the properties drawer
-  (`WORKTREE`, `BRANCH`, `PR`, `REPO`, `ID`, plus `ADOPTED` /
-  `SKIP_REVIEW` / `COMPANION` when present), and derived fields (`SLUG`,
-  `REPO_NAME`, `SOURCE_CLONE`, `TMUX_SESSION`, `DIND_VOLUME`,
+  (`WORKTREE`, `BRANCH`, `PR`, `VAULT`, `REPO`, `ID`, plus
+  `ADOPTED` / `SKIP_REVIEW` / `COMPANION` when present), and
+  derived fields (`SLUG`, `REPO_NAME`, `SOURCE_CLONE` (under
+  `vaults/<vault>/repos/`), `TMUX_SESSION`, `DIND_VOLUME`,
+  `CLAUDE_CREDS_VOLUME`,
   `CLOUDE_ROOT`). Sourced by `cloude-finalize-cleanup` and by the
   `/advance`, `/iterate`, `/drop`, `/babysit-ci`, `/babysit-merge`
   skills at their read-the-task-file step. Exit 3 names the missing
@@ -525,7 +530,8 @@ a worktree, so the host session reads this file directly.
 In-container claudes don't share an inode with this file, but
 Claude Code's project-settings discovery still finds an *equivalent*
 copy via the worktree's `.git`: for cloude-self-development
-worktrees (`cloude/worktrees/cloude-cade/<slug>/`), the worktree is
+worktrees (`cloude/vaults/<vault>/worktrees/cloude-cade/<slug>/`),
+the worktree is
 itself a cloude clone and ships its own `.claude/settings.json`.
 Without intervention, the in-container claude would pick up the host
 SessionStart hook and the staging-slug watcher reminder would leak
@@ -627,20 +633,26 @@ The container:
   because multiple in-flight tasks can't share one docker data dir
   (dockerd holds an exclusive lock). The volume persists across
   restarts of the same task to cache pulled images.
-- Persists Claude credentials/history in a named volume
-  (`cloude-claude-creds`), so login is required only once per
-  workstation.
-- Inherits git, gh, and docker-registry auth read-only from the host's
-  `~/.gitconfig`, `~/.config/gh`, and `~/.docker/config.json` (the
-  docker config mount is optional — skipped if absent). Mounting
-  `~/.docker/config.json` lets the in-container `docker pull` reach
-  private registries the host is logged into (e.g. ghcr.io).
-- The host's `GH_TOKEN` env var is forwarded into the container (when
-  set) so `gh` and the git credential helper baked into
-  `/etc/gitconfig` can authenticate against GitHub for HTTPS `git
-  fetch`/`push`. SSH-form remotes are not supported inside the
-  container (no SSH keys mounted); `/promote` clones via HTTPS to
-  avoid this.
+- Persists Claude credentials/history in a per-vault named volume
+  (`cloude-claude-creds-<vault-slug>`), so login is required only
+  once per vault per workstation.
+- **Vault-scoped git and gh auth.** `~/.gitconfig` and
+  `~/.config/gh` are mounted read-only from
+  `vaults/<vault>/creds/{gitconfig,gh/}` — NOT from the host's
+  ambient `$HOME`. `GH_TOKEN` comes from `vaults/<vault>/creds/env`
+  (a `KEY=value` file sourced into the container's environment);
+  the host's ambient `$GH_TOKEN` is no longer forwarded. SSH-form
+  remotes are not supported inside the container (no SSH keys
+  mounted); `/promote` clones via HTTPS to avoid this. Missing any
+  of `gh/`, `gitconfig`, or `env` in the vault's creds dir is a
+  hard error — `cloude-run` refuses to launch with a populate-it
+  message.
+- Inherits docker-registry auth read-only from the host's
+  `~/.docker/config.json` (optional — skipped if absent). This is
+  still host-wide rather than vault-scoped; vaults don't currently
+  isolate registry pulls. Mounting `~/.docker/config.json` lets the
+  in-container `docker pull` reach private registries the host is
+  logged into (e.g. ghcr.io).
 - The host's IANA timezone is forwarded as `TZ=<zone>` so in-container
   timestamps (the task file's `** Log` entries, `date`, etc.) match
   host-side `/promote` / `/finalize` stamps instead of mixing two
@@ -656,14 +668,35 @@ The container:
 - Mounts the cloude repo at the same absolute path it has on the host
   (read-only) plus rw overlays for the task's source clone, worktree,
   and active `.org` file. Other tasks remain read-only.
-- `tasks/active/` is mounted as a directory-level rw bind, not a
-  per-file mount: single-file bind mounts break when the host writes
-  via atomic-rename (the inode changes; the container keeps reading
-  the old inode). Mounting the directory keeps the bind stable
-  through atomic-rename writes from the host. The cost is that every
-  task file under `tasks/active/` is technically writable from any
-  in-container agent — agents must by convention only edit their
-  own `$CLOUDE_TASK_FILE`.
+- **Sibling vaults are hidden.** The mount order is:
+  1. `$CLOUDE:$CLOUDE:ro` — whole cloude repo, read-only. This
+     includes the shared `tasks/staging.org` and every vault's
+     directory under `vaults/`.
+  2. `--tmpfs $CLOUDE/vaults` — an empty tmpfs replaces the
+     read-only view of `vaults/`. The in-container agent can no
+     longer enumerate, stat, or read any of the host's vault
+     directories at this path.
+  3. `$CLOUDE/vaults/<this-vault>:...:rw` — the resolved vault is
+     bound back into the tmpfs, rw, at its original absolute path.
+     The container sees exactly its own vault and nothing else.
+  4. `$CLOUDE/vaults/<this-vault>/tasks/active:...:rw` — a
+     directory-level rw bind on top of layer 3 (same path, same
+     access) to keep atomic-rename-safe semantics explicit at the
+     call site.
+
+  The tmpfs-then-bind layering is what makes sibling-vault
+  isolation a property of the host mount layout rather than a
+  CLAUDE.md convention. Inside the container,
+  `ls $CLOUDE/vaults/` only sees `<this-vault>`.
+- The active task directory is mounted as a directory-level rw bind,
+  not a per-file mount: single-file bind mounts break when the host
+  writes via atomic-rename (the inode changes; the container keeps
+  reading the old inode). Mounting the directory keeps the bind
+  stable through atomic-rename writes from the host. The cost is
+  that every task file under `vaults/<this-vault>/tasks/active/` is
+  technically writable from any in-container agent **within that
+  vault** — agents must by convention only edit their own
+  `$CLOUDE_TASK_FILE`.
 
 ### `bin/cloude-run`
 
@@ -717,7 +750,11 @@ Two layers, sharing one `conftest.py`:
 - **Subprocess tests** spawn the script under `.venv-host/bin/python`
   via the `run_script` fixture, feed stdin / args, and assert on the
   exit code, on stdout, and on side effects against a `task_file_factory`
-  fixture that writes throwaway task `.org` files into `tmp_path/tasks/active/`.
+  fixture that writes throwaway task `.org` files into
+  `tmp_path/vaults/<vault>/tasks/active/` (default vault `personal`).
+  A companion `vault_creds_factory` materializes
+  `vaults/<vault>/creds/{gh/,gitconfig,env}` for the
+  `cloude-run` subprocess tests.
 
 Out of scope (intentionally): the bash helpers (`cloude-finalize-cleanup`,
 `cloude-promote-setup`, `cloude-run`, `cloude-prefill-prompt`,

@@ -1,7 +1,16 @@
 IMAGE := cloude
-VOLUME := cloude-claude-creds
+# Each vault has its own Claude credentials volume so different vaults
+# log in to different Claude accounts. VAULT is overridable on the
+# command line (e.g. `make login VAULT=work`); the default matches the
+# canonical first-vault slug used throughout the docs.
+VAULT ?= personal
+VOLUME := cloude-claude-creds-$(VAULT)
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
+# Per-vault credential dir on the host. `make login` mounts the
+# vault's gitconfig and gh dir so the in-container `claude` /
+# subsequent `gh` calls authenticate as that vault.
+VAULT_CREDS := vaults/$(VAULT)/creds
 
 # Host-side Python venv for the bin/ helpers that import third-party
 # packages (orgparse, etc.). Built from pyproject.toml + uv.lock by
@@ -18,12 +27,12 @@ help:
 	@echo "  build         Build the cloude image (UID/GID match host user)"
 	@echo "  rebuild       Build with --no-cache"
 	@echo "  shell         Open a bash shell in a transient container"
-	@echo "  login         Run claude interactively to perform first-time login"
+	@echo "  login         Run claude interactively to perform first-time login for VAULT=$(VAULT)"
 	@echo "  sync          Build the host venv ($(HOST_VENV)/) from uv.lock (incl. dev deps)"
 	@echo "  test          Run the pytest suite under tests/"
 	@echo "  info          Show image and volume status"
 	@echo "  clean-image   Remove the image"
-	@echo "  clean-volume  Remove the credentials volume (forces re-login)"
+	@echo "  clean-volume  Remove the VAULT=$(VAULT) credentials volume (forces re-login)"
 	@echo "  clean-dind-data  Remove per-task DinD data volumes (cloude-dind-*)"
 	@echo "  clean-venv    Remove the host venv ($(HOST_VENV)/)"
 	@echo "  clean         clean-image + clean-volume + clean-dind-data + clean-venv"
@@ -48,11 +57,20 @@ shell: build
 		--entrypoint bash $(IMAGE)
 
 login: build
+	@if [ ! -d "$(VAULT_CREDS)/gh" ] || [ ! -f "$(VAULT_CREDS)/gitconfig" ]; then \
+		echo "ERROR: vault '$(VAULT)' is missing credentials at $(VAULT_CREDS)/."; \
+		echo "Populate it first:"; \
+		echo "  mkdir -p $(VAULT_CREDS)/gh"; \
+		echo "  cp -r ~/.config/gh/. $(VAULT_CREDS)/gh/"; \
+		echo "  cp ~/.gitconfig $(VAULT_CREDS)/gitconfig"; \
+		echo "  echo GH_TOKEN=ghp_... > $(VAULT_CREDS)/env"; \
+		exit 1; \
+	fi
 	docker run --rm -it --privileged \
 		-v $(VOLUME):/persist \
 		-v /var/lib/docker \
-		-v $$HOME/.gitconfig:/home/cloude/.gitconfig:ro \
-		-v $$HOME/.config/gh:/home/cloude/.config/gh:ro \
+		-v $(PWD)/$(VAULT_CREDS)/gitconfig:/home/cloude/.gitconfig:ro \
+		-v $(PWD)/$(VAULT_CREDS)/gh:/home/cloude/.config/gh:ro \
 		$$([ -f $$HOME/.docker/config.json ] && echo "-v $$HOME/.docker/config.json:/home/cloude/.docker/config.json:ro") \
 		$(IMAGE) claude
 

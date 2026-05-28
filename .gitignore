@@ -1,6 +1,7 @@
-# Source clones and worktrees managed by /promote
-repos/
-worktrees/
+# Per-vault data managed by /promote: source clones, worktrees,
+# active/done task files, and the vault's credential dir all live
+# under vaults/<vault>/.
+vaults/
 
 # Track project-scoped slash commands and the host-side hook config
 # (overrides global ignore of .claude/). settings.local.json and
@@ -31,10 +32,10 @@ __pycache__/
 .venv-host/
 
 # User-specific task data — captured per-machine, not part of the repo.
+# staging.org stays shared at the top level; per-vault active/done
+# task files live under vaults/<vault>/tasks/{active,done}/ and are
+# covered by the vaults/ ignore above.
 /tasks/staging.org
-/tasks/active/*.org
-/tasks/completed/*.org
-/tasks/dropped/*.org
 
 # Project-specific pre-launch hooks — each user adds their own.
 # Exception: repo-hooks/cloude-cade ships with the repo so cloude-self

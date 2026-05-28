@@ -41,9 +41,13 @@ Usage: $(basename "$0") --mode {standard|adopt} <args>
 
 Common required args:
   --mode {standard|adopt}
+  --vault <vault-slug>           identifies the vault this task belongs to;
+                                 rooted-paths and credential isolation hang
+                                 off this. Lands in the task file's :VAULT:
+                                 property.
   --slug <slug>                  filesystem-safe slug
   --repo-url <url>               https:// or git@ form, from staging :REPO:
-  --task-file <abs-path>         tasks/active/<YYYY-MM-DD>-<slug>.org
+  --task-file <abs-path>         vaults/<vault>/tasks/active/<YYYY-MM-DD>-<slug>.org
   --staging-heading <text>       exact heading to delete from staging.org
 
 Common optional args:
@@ -71,6 +75,7 @@ EOF
 # --- arg parsing -----------------------------------------------------------
 
 MODE=""
+VAULT=""
 SLUG=""
 REPO_URL=""
 TASK_FILE=""
@@ -92,6 +97,7 @@ fi
 while (($#)); do
     case "$1" in
         --mode)              MODE="$2"; shift 2 ;;
+        --vault)             VAULT="$2"; shift 2 ;;
         --slug)              SLUG="$2"; shift 2 ;;
         --repo-url)          REPO_URL="$2"; shift 2 ;;
         --task-file)         TASK_FILE="$2"; shift 2 ;;
@@ -118,6 +124,7 @@ require() {
 }
 
 require --mode "$MODE"
+require --vault "$VAULT"
 require --slug "$SLUG"
 require --repo-url "$REPO_URL"
 require --task-file "$TASK_FILE"
@@ -162,8 +169,8 @@ parse_repo_url() {
 }
 parse_repo_url "$REPO_URL"
 
-SOURCE_CLONE="$CLOUDE_ROOT/repos/$REPO_NAME"
-WORKTREE="$CLOUDE_ROOT/worktrees/$REPO_NAME/$SLUG"
+SOURCE_CLONE="$CLOUDE_ROOT/vaults/$VAULT/repos/$REPO_NAME"
+WORKTREE="$CLOUDE_ROOT/vaults/$VAULT/worktrees/$REPO_NAME/$SLUG"
 TMUX_SESSION="cloude-$SLUG"
 
 # Track what we managed to do so a mid-flow failure can describe state.
@@ -186,7 +193,7 @@ bail() {
 # --- Step 2: ensure source clone -------------------------------------------
 
 if [[ ! -d "$SOURCE_CLONE" ]]; then
-    mkdir -p "$CLOUDE_ROOT/repos"
+    mkdir -p "$CLOUDE_ROOT/vaults/$VAULT/repos"
     if ! gh repo clone "$OWNER/$REPO_NAME" "$SOURCE_CLONE" >/dev/null 2>&1; then
         bail 10 "gh repo clone $OWNER/$REPO_NAME failed"
     fi
@@ -297,18 +304,18 @@ import os, sys
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.environ["CLOUDE_ROOT"], "bin"))
 from cloude_org import render_task_from_template
-(tmpl, dest, todo, heading, task_id, repo_url, branch, worktree, pr_url,
- adopted_flag, skip_review_flag, companion, notes_prelude) = sys.argv[1:]
+(tmpl, dest, todo, heading, task_id, vault, repo_url, branch, worktree,
+ pr_url, adopted_flag, skip_review_flag, companion, notes_prelude) = sys.argv[1:]
 out = render_task_from_template(
     Path(tmpl).read_text(),
-    todo=todo, heading=heading, task_id=task_id, repo_url=repo_url,
-    branch=branch, worktree=worktree, pr_url=pr_url,
+    todo=todo, heading=heading, task_id=task_id, vault=vault,
+    repo_url=repo_url, branch=branch, worktree=worktree, pr_url=pr_url,
     adopted=bool(adopted_flag), skip_review=bool(skip_review_flag),
     companion=companion, notes_prelude=notes_prelude,
 )
 Path(dest).write_text(out)
 ' "$TEMPLATE" "$TASK_FILE" "$NEW_TODO" "$NEW_HEADING" "$TASK_ID" \
-    "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" \
+    "$VAULT" "$REPO_URL" "$BRANCH" "$WORKTREE" "$PR_URL" \
     "$ADOPTED_FLAG" "$SKIP_REVIEW_FLAG" "$COMPANION" "$NOTES_PRELUDE"; then
     bail 13 "task-file render failed"
 fi

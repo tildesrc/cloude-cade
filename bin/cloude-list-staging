@@ -5,31 +5,52 @@
 # ///
 # List promotable ideas from tasks/staging.org for /promote.
 #
+# staging.org outline shape (vault-rooted):
+#
+#   * <Vault heading>
+#     :PROPERTIES:
+#     :SLUG: <vault-slug>          (optional — derived from heading if absent)
+#     :END:
+#   ** <Project heading>
+#      :PROPERTIES:
+#      :REPO: https://github.com/...
+#      :SKIP_REVIEW: t              (optional)
+#      :END:
+#   *** <Idea heading>
+#       :PROPERTIES:
+#       :SLUG: ...                  (optional)
+#       :ADOPT: <pr-url>            (optional, ADOPT-mode trigger)
+#       :COMPANION: <task-id>       (optional)
+#       :END:
+#
 # Default output (stdout):
 #
 #   PROMOTABLE
-#   1) [project-heading] idea heading text  [ADOPT]
-#   2) [project-heading] another idea
+#   1) [<vault-slug>/<project-heading>] idea heading text  [ADOPT]
+#   2) [<vault-slug>/<project-heading>] another idea
 #   ...
 #   TODO_PROJECTS  <count>
 #
 # Where:
-#   - Top-level headings with a :REPO: property are promotable projects;
-#     their sub-headings are listed (numbered globally so /promote can
-#     index by integer).
+#   - Level-2 headings with a :REPO: property are promotable projects;
+#     their level-3 sub-headings are listed (numbered globally so
+#     /promote can index by integer).
+#   - The vault slug prefix in `[<vault>/<project>]` disambiguates
+#     same-named projects across vaults.
 #   - [ADOPT] suffix is appended when the idea heading carries an
 #     :ADOPT: property in its properties drawer (the ADOPT-mode
 #     trigger documented in promote.md). Heading text is free-form
 #     in either mode; mode is determined by property presence.
-#   - TODO_PROJECTS gives the count of top-level headings without
-#     :REPO: (personal-TODO projects, not promotable). /promote uses
-#     it to print the one-line "(TODO-project ideas omitted)" notice
-#     without re-parsing the file.
+#   - TODO_PROJECTS gives the total count of level-2 headings without
+#     :REPO: across all vaults (personal-TODO projects, not
+#     promotable). /promote uses it to print the one-line "(TODO-project
+#     ideas omitted)" notice without re-parsing the file.
 #
 # With --select N, instead emits the full record for the idea at
 # index N (same numbering as the listing) as shell-safe KEY=VALUE
 # lines, so /promote can `eval` it rather than re-parsing staging.org:
 #
+#   VAULT=<vault-slug>
 #   REPO=https://github.com/owner/repo
 #   HEADING=<exact idea heading text>
 #   MODE=<standard|adopt>
@@ -37,6 +58,12 @@
 #   COMPANION=<value of the idea's :COMPANION: property, or empty>
 #   SKIP_REVIEW=<project's :SKIP_REVIEW: property, or empty>
 #   SLUG=<value of the idea's :SLUG: property, or empty>
+#
+# VAULT carries the level-1 vault's resolved slug — its :SLUG: property
+# if set, otherwise derive_slug() applied to the heading. /promote
+# forwards it to cloude-promote-setup so it lands in the task file's
+# :VAULT: property and is used to build vaults/<vault>/{repos,worktrees,
+# tasks}/ paths.
 #
 # SKIP_REVIEW carries the project heading's optional :SKIP_REVIEW:
 # property (`t` when the repo opts out of peer review). /promote
@@ -85,39 +112,56 @@ CLOUDE_ROOT = Path(
 )
 STAGING = CLOUDE_ROOT / "tasks" / "staging.org"
 
+# Shared slug-derivation rule for vault headings without :SLUG: — same
+# regex /promote applies to ideas, so vault filesystem names follow
+# the same shape as idea slugs.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cloude_org import derive_slug  # noqa: E402
+
 
 def _collect(root):
     """Walk staging into a list of promotable idea records.
 
     Returns (records, todo_projects) where each record is a dict with
-    keys: index (1-based, global), project, repo, title.
+    keys: index (1-based, global), vault, project, repo, title.
+    `todo_projects` is the total count of level-2 (project) headings
+    across all vaults that lack a :REPO: property — these are
+    personal-TODO projects, surfaced as a single TODO_PROJECTS line so
+    /promote can warn about omitted ideas.
     """
     records = []
     todo_projects = 0
     n = 0
-    for project in root.children:
-        props = dict(project.properties) if project.properties else {}
-        if not props.get("REPO"):
-            todo_projects += 1
-            continue
-        project_name = str(project.heading).strip()
-        repo = props["REPO"].strip()
-        skip_review = (props.get("SKIP_REVIEW") or "").strip()
-        for idea in project.children:
-            n += 1
-            idea_props = dict(idea.properties) if idea.properties else {}
-            records.append(
-                {
-                    "index": n,
-                    "project": project_name,
-                    "repo": repo,
-                    "skip_review": skip_review,
-                    "title": str(idea.heading).strip(),
-                    "adopt_pr": (idea_props.get("ADOPT") or "").strip(),
-                    "companion": (idea_props.get("COMPANION") or "").strip(),
-                    "slug": (idea_props.get("SLUG") or "").strip(),
-                }
-            )
+    for vault in root.children:
+        vault_props = dict(vault.properties) if vault.properties else {}
+        vault_heading = str(vault.heading).strip()
+        vault_slug = (vault_props.get("SLUG") or "").strip() or derive_slug(
+            vault_heading
+        )
+        for project in vault.children:
+            props = dict(project.properties) if project.properties else {}
+            if not props.get("REPO"):
+                todo_projects += 1
+                continue
+            project_name = str(project.heading).strip()
+            repo = props["REPO"].strip()
+            skip_review = (props.get("SKIP_REVIEW") or "").strip()
+            for idea in project.children:
+                n += 1
+                idea_props = dict(idea.properties) if idea.properties else {}
+                records.append(
+                    {
+                        "index": n,
+                        "vault": vault_slug,
+                        "project": project_name,
+                        "repo": repo,
+                        "skip_review": skip_review,
+                        "title": str(idea.heading).strip(),
+                        "adopt_pr": (idea_props.get("ADOPT") or "").strip(),
+                        "companion": (idea_props.get("COMPANION") or "").strip(),
+                        "slug": (idea_props.get("SLUG") or "").strip(),
+                    }
+                )
     return records, todo_projects
 
 
@@ -191,6 +235,7 @@ def main(argv: list[str]) -> int:
             return 2
         adopt_pr = match["adopt_pr"]
         is_adopt = bool(adopt_pr)
+        _emit("VAULT", match["vault"])
         _emit("REPO", match["repo"])
         _emit("HEADING", match["title"])
         _emit("MODE", "adopt" if is_adopt else "standard")
@@ -209,7 +254,9 @@ def main(argv: list[str]) -> int:
     print("PROMOTABLE")
     for r in records:
         suffix = "  [ADOPT]" if r["adopt_pr"] else ""
-        print(f"{r['index']}) [{r['project']}] {r['title']}{suffix}")
+        print(
+            f"{r['index']}) [{r['vault']}/{r['project']}] {r['title']}{suffix}"
+        )
     print(f"TODO_PROJECTS {todo_projects}")
     return 0
 

@@ -88,10 +88,16 @@ class TestParseRepoUrl:
 
 
 def _build_tasks_tree(tmp_path: Path, fixtures_dir: Path) -> Path:
-    """Lay out tasks/{active,staging.org} under tmp_path."""
+    """Lay out tasks/staging.org + vaults/personal/tasks/active/ under tmp_path.
+
+    Returns the top-level ``tasks/`` dir so callers can still access
+    ``tasks/staging.org``. Per-vault active task files land under
+    ``vaults/personal/tasks/active/`` after promote runs.
+    """
     tasks = tmp_path / "tasks"
-    (tasks / "active").mkdir(parents=True)
+    tasks.mkdir(parents=True, exist_ok=True)
     shutil.copy(fixtures_dir / "staging.org", tasks / "staging.org")
+    (tmp_path / "vaults" / "personal" / "tasks" / "active").mkdir(parents=True)
     return tasks
 
 
@@ -180,8 +186,14 @@ class TestPromoteSubprocess:
         assert "skip-review" not in argv
         # No --companion when COMPANION is empty.
         assert "companion" not in argv
-        # Task file lives under <CLOUDE_ROOT>/tasks/active/<date>-<slug>.org.
-        assert str(tmp_path / "tasks" / "active") in str(argv["task-file"])
+        # Task file lives under <CLOUDE_ROOT>/vaults/<vault>/tasks/active/
+        # <date>-<slug>.org. The "Example project" lives under the
+        # "personal" vault in the fixture.
+        assert argv["vault"] == "personal"
+        assert (
+            str(tmp_path / "vaults" / "personal" / "tasks" / "active")
+            in str(argv["task-file"])
+        )
         assert str(argv["task-file"]).endswith("first-idea.org")
 
     def test_slug_flag_overrides_heading_derive(
@@ -289,11 +301,15 @@ class TestPromoteFailureModes:
         """Heading with no alphanumeric chars and no :SLUG: → exit 41."""
         tasks = _build_tasks_tree(tmp_path, fixtures_dir)
         (tasks / "staging.org").write_text(
-            "* Project\n"
+            "* Personal\n"
             "  :PROPERTIES:\n"
-            "  :REPO: https://github.com/example/example\n"
+            "  :SLUG: personal\n"
             "  :END:\n"
-            "** !!! @@@ ###\n"
+            "** Project\n"
+            "   :PROPERTIES:\n"
+            "   :REPO: https://github.com/example/example\n"
+            "   :END:\n"
+            "*** !!! @@@ ###\n"
         )
         gh_dir = _install_gh_stub(tmp_path, _GH_STUB_OK)
         result = run_script(

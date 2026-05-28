@@ -36,5 +36,5 @@ The host needs to run /sweep (or /finalize directly) to:
   - close the PR (<:PR: value>)
   - kill the tmux session
   - remove the worktree
-  - git mv the file from tasks/active/ to tasks/done/
+  - git mv the file from the vault's tasks/active/ to its tasks/done/
 ```
