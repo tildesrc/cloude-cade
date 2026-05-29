@@ -310,7 +310,8 @@ hooks (`bin/cloude-on-user-prompt` and `bin/cloude-on-stop`) set
 turn ends. The end-of-turn flip is suppressed while the agent is still
 waiting on background work it kicked off (any Bash launched with
 `run_in_background: true` whose completion `task-notification` hasn't
-arrived yet, or an active `/babysit-ci` / `/babysit-merge` loop), so
+arrived yet, a pending `ScheduleWakeup` whose `scheduledFor` is still
+in the future, or an active `/babysit-ci` / `/babysit-merge` loop), so
 the tag stays `:agent:` until the background work settles. You only
 need to set `:blocked:` deliberately — and you *can* set it during a
 turn to keep the ball off the user at end of turn (e.g., when you've
