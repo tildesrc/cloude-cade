@@ -507,15 +507,19 @@ who-has-the-ball tag in sync with what the agent is actually doing:
   once per stop cycle. *Background-work carve-out:* the hook is a
   full no-op (no tag flip, no DoD check, the marker stays armed for
   next turn) whenever the agent is still waiting on background work
-  it kicked off. Two signals each suffice: a `/babysit-ci` or
+  it kicked off. Three signals each suffice: a `/babysit-ci` or
   `/babysit-merge` state file in the worktree
-  (`.cloude-babysit-*-state.json`), and an in-flight background Bash
+  (`.cloude-babysit-*-state.json`), an in-flight background Bash
   detected by scanning the transcript JSONL for a
   `run_in_background: true` start without a matching completion
-  `task-notification`. The transcript scan generalizes the babysit
-  carve-out to every background Bash the agent launches, so the
-  dashboard accurately shows `:agent:` while the agent is genuinely
-  waiting on its own work.
+  `task-notification`, and a pending `ScheduleWakeup` detected by
+  scanning the same transcript for the latest `ScheduleWakeup` tool
+  result whose `toolUseResult.scheduledFor` (unix-ms) is strictly in
+  the future. The transcript scan generalizes the babysit carve-out
+  to every way the agent can voluntarily pause while still owning
+  the ball (background Bash, scheduled wakeup), so the dashboard
+  accurately shows `:agent:` while the agent is genuinely waiting on
+  its own work.
 - **`PreToolUse:AskUserQuestion` / `PostToolUse:AskUserQuestion` →
   `bin/cloude-on-user-question pre` / `… post`.** Manages the tag
   around an `AskUserQuestion` wait window — neither `Stop` nor

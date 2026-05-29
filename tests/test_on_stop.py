@@ -9,6 +9,9 @@ on a DoD violation, the on-disk tag flip on a quiet turn, or silence.
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
+
 
 from cloude_org import dod_marker_path, parse_heading
 
@@ -25,6 +28,98 @@ def _stop_input(**overrides) -> str:
     }
     payload.update(overrides)
     return json.dumps(payload)
+
+
+# ---------------------------------------------------------------------------
+# Transcript-fixture helpers
+#
+# Real Claude Code transcripts are JSONL with assorted entry shapes.
+# The Stop hook only cares about three of them, mirrored here as
+# minimal dicts that the parser accepts:
+#
+#   * assistant tool_use for Bash with run_in_background=True
+#   * queue-operation enqueue with a <task-notification>...<status>
+#     completed</status>... payload
+#   * assistant tool_use for ScheduleWakeup paired with a user
+#     tool_result whose outer entry has toolUseResult.scheduledFor
+# ---------------------------------------------------------------------------
+
+
+def _write_transcript(tmp_path: Path, *entries: dict) -> Path:
+    """Write JSONL `entries` into a fresh transcript file under tmp_path."""
+    path = tmp_path / "transcript.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for entry in entries:
+            fh.write(json.dumps(entry) + "\n")
+    return path
+
+
+def _bash_start(tool_use_id: str) -> dict:
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": "Bash",
+                    "input": {"command": "sleep 999", "run_in_background": True},
+                }
+            ],
+        },
+    }
+
+
+def _bash_completion(tool_use_id: str) -> dict:
+    return {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "content": (
+            "<task-notification>"
+            f"<tool-use-id>{tool_use_id}</tool-use-id>"
+            "<status>completed</status>"
+            "</task-notification>"
+        ),
+    }
+
+
+def _wakeup_start(tool_use_id: str) -> dict:
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": "ScheduleWakeup",
+                    "input": {"delaySeconds": 60, "reason": "test", "prompt": "test"},
+                }
+            ],
+        },
+    }
+
+
+def _wakeup_result(tool_use_id: str, scheduled_for_ms: int) -> dict:
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": "Next wakeup scheduled.",
+                }
+            ],
+        },
+        "toolUseResult": {
+            "scheduledFor": scheduled_for_ms,
+            "clampedDelaySeconds": 60,
+            "wasClamped": False,
+        },
+    }
 
 
 class TestTagHandback:
@@ -295,3 +390,124 @@ class TestBackgroundCarveOut:
         assert dod_marker_path(task).exists()
         # Clean up the marker we armed.
         dod_marker_path(task).unlink()
+
+    def test_in_flight_background_bash_keeps_hook_silent(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        transcript = _write_transcript(
+            tmp_path, _bash_start("toolu_bg_1")
+        )
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["agent"]
+        assert result.stdout == ""
+
+    def test_completed_background_bash_lets_hook_flip(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        transcript = _write_transcript(
+            tmp_path,
+            _bash_start("toolu_bg_2"),
+            _bash_completion("toolu_bg_2"),
+        )
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["user"]
+
+    def test_pending_schedule_wakeup_keeps_hook_silent(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        dod_marker_path(task).touch()
+        # `scheduledFor` an hour in the future, in unix-ms.
+        future_ms = (int(time.time()) + 3600) * 1000
+        transcript = _write_transcript(
+            tmp_path,
+            _wakeup_start("toolu_w_1"),
+            _wakeup_result("toolu_w_1", future_ms),
+        )
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["agent"]
+        assert result.stdout == ""
+        assert dod_marker_path(task).exists()
+        dod_marker_path(task).unlink()
+
+    def test_fired_schedule_wakeup_lets_hook_flip(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        past_ms = (int(time.time()) - 3600) * 1000
+        transcript = _write_transcript(
+            tmp_path,
+            _wakeup_start("toolu_w_2"),
+            _wakeup_result("toolu_w_2", past_ms),
+        )
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["user"]
+
+    def test_latest_wakeup_supersedes_earlier_one(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        """An earlier wakeup scheduled far in the future is canceled by a
+        later call whose scheduledFor is already in the past. The hook
+        should look at the *latest* call, not the maximum scheduledFor.
+        """
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        future_ms = (int(time.time()) + 3600) * 1000
+        past_ms = (int(time.time()) - 60) * 1000
+        transcript = _write_transcript(
+            tmp_path,
+            _wakeup_start("toolu_w_3a"),
+            _wakeup_result("toolu_w_3a", future_ms),
+            _wakeup_start("toolu_w_3b"),
+            _wakeup_result("toolu_w_3b", past_ms),
+        )
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["user"]
+
+    def test_no_schedule_wakeup_in_transcript_is_no_op(
+        self, run_script, task_file_factory, tmp_path
+    ):
+        """A transcript that has no ScheduleWakeup entries at all should
+        not change today's behavior — the hook flips :agent: -> :user:.
+        """
+        task = task_file_factory(todo="PLANNING", tag="agent")
+        transcript = _write_transcript(tmp_path)  # empty file
+        result = run_script(
+            "cloude-on-stop",
+            stdin=_stop_input(transcript_path=str(transcript)),
+            env={"CLOUDE_TASK_FILE": str(task)},
+        )
+        assert result.returncode == 0
+        _, tags = parse_heading(task.read_text())
+        assert tags == ["user"]

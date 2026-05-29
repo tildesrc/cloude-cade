@@ -36,7 +36,7 @@ the split between them is the whole point of this hook:
 If the agent ends a turn while still waiting on background work, this
 hook is a full no-op — no tag flip, no DoD reminder, and the DoD
 marker (if armed) is preserved for the next turn so the reminder
-eventually fires once the background work settles. Two signals each
+eventually fires once the background work settles. Three signals each
 suffice to keep the hook silent:
 
 - A `/babysit-ci` or `/babysit-merge` state file in the worktree (the
@@ -46,18 +46,24 @@ suffice to keep the hook silent:
   any assistant `tool_use` for Bash with `run_in_background: true`
   whose completion `task-notification` (delivered as a
   `queue-operation` enqueue) hasn't arrived yet.
+- A pending `ScheduleWakeup` detected by scanning the transcript: the
+  *latest* `ScheduleWakeup` tool result's `scheduledFor` (unix-ms) is
+  strictly in the future. The wakeup is the agent's own continuation
+  — firing it triggers a new turn — so the agent still owns the ball
+  until it fires (and either schedules a new one or stops).
 
-This generalizes the babysit carve-out to every background Bash the
-agent kicks off, so the dashboard accurately shows `:agent:` while
-the agent is genuinely waiting on work it owns.
+This generalizes the babysit carve-out to every way the agent can
+voluntarily pause while still owning the ball, so the dashboard
+accurately shows `:agent:` while the agent is genuinely waiting on
+work it owns.
 
 The single-block-per-stop guarantee comes from honoring the harness's
 `stop_hook_active` flag: when set, the DoD check is skipped, so the
 model cannot get stuck in a block loop.
 
 Everything else is a silent no-op (no task file, unparseable heading,
-a terminal COMPLETE / DROPPED stage, a babysit loop active, or an
-in-flight background Bash).
+a terminal COMPLETE / DROPPED stage, a babysit loop active, an
+in-flight background Bash, or a pending ScheduleWakeup).
 
 Why this exists: `bin/cloude-dash` color-codes every active task by
 `:agent:` / `:user:` / `:blocked:`. A stale `:agent:` silently lies to
@@ -78,6 +84,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # The heading parser and the marker-path helper are shared with the
@@ -195,7 +202,7 @@ def check_dod(content: str, state: str) -> str | None:
 def should_stay_silent(hook_input: dict) -> bool:
     """True when the hook must be a full no-op for this Stop.
 
-    Two independent signals — either one is sufficient:
+    Three independent signals — any one is sufficient:
       1. A `/babysit-ci` or `/babysit-merge` state file in `cwd`. The
          skills keep these as their own positive markers (and use them
          for their own persistent state — `watch_bash_id`, retry
@@ -205,10 +212,16 @@ def should_stay_silent(hook_input: dict) -> bool:
          start without a matching completion `task-notification`. This
          generalizes the carve-out: any background Bash the agent kicks
          off keeps the heading at `:agent:` while it's still running.
+      3. The transcript's latest `ScheduleWakeup` tool result has a
+         `scheduledFor` (unix-ms) strictly in the future. The wakeup is
+         the agent's own continuation — firing it triggers a new turn —
+         so the agent still owns the ball until it fires.
     """
+    transcript = hook_input.get("transcript_path")
     return (
         babysit_loop_active(hook_input.get("cwd"))
-        or background_bash_pending(hook_input.get("transcript_path"))
+        or background_bash_pending(transcript)
+        or scheduled_wakeup_pending(transcript)
     )
 
 
@@ -299,6 +312,69 @@ def background_bash_pending(transcript_path: str | None) -> bool:
     except OSError:
         return False
     return bool(started - completed)
+
+
+def scheduled_wakeup_pending(transcript_path: str | None) -> bool:
+    """True when the *latest* ScheduleWakeup tool result in the
+    transcript has a `scheduledFor` (unix-ms) strictly in the future.
+
+    Each ScheduleWakeup call supersedes the previous one (the harness
+    keeps a single pending wakeup per session), so the most recent
+    completed call by transcript order — not the largest `scheduledFor`
+    — is authoritative. An earlier call may have armed a wakeup farther
+    in the future that a later call then pulled in or canceled.
+
+    Matching is by `tool_use_id`: ScheduleWakeup isn't the only tool
+    that writes `toolUseResult`, so blindly grabbing the last
+    `toolUseResult` would be wrong.
+
+    A missing or unreadable transcript is treated as "no pending
+    wakeup", same bail-out as `background_bash_pending` — better to
+    err on the side of today's flip behavior than to wedge `:agent:`.
+    """
+    if not transcript_path:
+        return False
+    path = Path(transcript_path)
+    if not path.is_file():
+        return False
+    wakeup_starts: set[str] = set()
+    latest_scheduled_for: int | None = None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                msg = entry.get("message") or {}
+                if msg.get("role") == "assistant":
+                    for block in msg.get("content") or []:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_use"
+                            and block.get("name") == "ScheduleWakeup"
+                        ):
+                            tuid = block.get("id")
+                            if tuid:
+                                wakeup_starts.add(tuid)
+                    continue
+                if msg.get("role") == "user":
+                    for block in msg.get("content") or []:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_result"
+                            and block.get("tool_use_id") in wakeup_starts
+                        ):
+                            result = entry.get("toolUseResult") or {}
+                            scheduled_for = result.get("scheduledFor")
+                            if isinstance(scheduled_for, (int, float)):
+                                latest_scheduled_for = int(scheduled_for)
+    except OSError:
+        return False
+    if latest_scheduled_for is None:
+        return False
+    now_ms = int(time.time() * 1000)
+    return latest_scheduled_for > now_ms
 
 
 def flip_to_user(task: str) -> None:
